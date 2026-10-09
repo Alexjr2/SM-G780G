@@ -15,7 +15,7 @@ JOBS="${JOBS:-$(nproc)}"
 STOCK_CONFIG_SOURCE="${STOCK_CONFIG_SOURCE:-$SCRIPT_DIR/stock_R8Q}"
 KSU_SETUP_URL="${KSU_SETUP_URL:-https://raw.githubusercontent.com/backslashxx/KernelSU/master/kernel/setup.sh}"
 KSU_REF="${KSU_REF:-master}"
-CLANG_TOOLCHAIN_URL="${CLANG_TOOLCHAIN_URL:-https://github.com/Neutron-Toolchains/clang-build-catalogue/releases/download/05012024/neutron-clang-05012024.tar.zst}"
+CLANG_TOOLCHAIN_URL="${CLANG_TOOLCHAIN_URL:-}"
 
 ORIGIN_BOOTIMG_URL="${ORIGIN_BOOTIMG_URL:-https://github.com/Alexjr2/SM-G780G/releases/download/originalboot/boot.img}"
 MAGISKBOOT_REPO="${MAGISKBOOT_REPO:-xiaoxindada/magisk_bins_ndk}"
@@ -98,7 +98,11 @@ else
 
     echo -e "${YELLOW}Clang toolchain not found; downloading the latest Neutron toolchain...${NC}"
     mkdir -p "$TOOLCHAIN_DIR"
-    TOOLCHAIN_URL="$CLANG_TOOLCHAIN_URL"
+    TOOLCHAIN_URL="${CLANG_TOOLCHAIN_URL:-}"
+    if [[ -z "$TOOLCHAIN_URL" ]]; then
+        TOOLCHAIN_URL="$(curl -fsSL "https://api.github.com/repos/Neutron-Toolchains/clang-build-catalogue/releases/latest" \
+            | jq -r '[.assets[] | select(.name | endswith(".tar.zst"))][0].browser_download_url // empty')"
+    fi
     [[ -n "$TOOLCHAIN_URL" ]] || die "Could not find a .tar.zst Clang release"
     curl -fL --retry 3 "$TOOLCHAIN_URL" \
         | tar --zstd -x -C "$TOOLCHAIN_DIR" --strip-components=1
@@ -117,17 +121,6 @@ echo -e "${BLUE}Defconfig     : $DEFCONFIG${NC}"
 rm -rf -- "$OUT_DIR"
 mkdir -p "$OUT_DIR"
 
-# The pinned Neutron archive also contains an x86_64 GNU `ld` named `ld`.
-# Clang searches PATH for that name during vDSO linking and then rejects the
-# ARM64 emulation mode. Put an isolated `ld` alias in front of the toolchain,
-# pointing to the matching LLD binary instead of modifying the archive.
-LLD_BIN="$(command -v ld.lld || true)"
-[[ -x "$LLD_BIN" ]] || die "ld.lld was not found"
-LINKER_BIN="$OUT_DIR/linker-bin"
-mkdir -p "$LINKER_BIN"
-ln -sfn "$LLD_BIN" "$LINKER_BIN/ld"
-export PATH="$LINKER_BIN:$PATH"
-
 # Use the ARM64 GNU assembler for old vDSO assembly syntax. Put it behind a
 # plain `as` name in a private tool directory so Clang cannot fall back to the
 # host /usr/bin/as when -no-integrated-as is enabled by this old kernel tree.
@@ -141,10 +134,6 @@ if grep -q -- '-no-integrated-as' "$KERNEL_DIR/Makefile"; then
     # Keep C compilation on Clang IAS; apply the legacy external assembler
     # only to KBUILD_AFLAGS used by .S/vDSO files.
     sed -E -i "s|^[[:space:]]*CLANG_FLAGS[[:space:]]*\+=[[:space:]]*-no-integrated-as|CLANG_FLAGS +=|" \
-        "$KERNEL_DIR/Makefile"
-    # Clang otherwise follows its prefix and selects the archive's x86_64
-    # GNU bin/ld, even when PATH contains the LLD alias above.
-    sed -i "/^CLANG_FLAGS +=$/a CLANG_FLAGS += -fuse-ld=ld.lld" \
         "$KERNEL_DIR/Makefile"
     sed -i "/^CLANG_FLAGS +=$/a KBUILD_AFLAGS += -no-integrated-as -B${AS_TOOL_DIR}/" \
         "$KERNEL_DIR/Makefile"
