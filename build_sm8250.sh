@@ -50,14 +50,6 @@ done
 # reproducible-build adjustments below must be able to edit this tree.
 chmod -R u+rwX "$KERNEL_DIR"
 
-# This old Android tree forces Clang to use the host assembler. That produces
-# '/usr/bin/as: unrecognized option -EL' on the ARM64 GitHub runner. Use
-# Clang's integrated ARM64 assembler instead.
-if grep -q -- '-no-integrated-as' "$KERNEL_DIR/Makefile"; then
-    sed -i 's|CLANG_FLAGS[[:space:]]*+=[[:space:]]*-no-integrated-as|CLANG_FLAGS +=|' \
-        "$KERNEL_DIR/Makefile"
-fi
-
 # This Samsung 4.19 tree invokes gcc-wrapper.py directly when CONFIG_CFP=y.
 # Its old Python 2 shebang is not available on Ubuntu 24.04; the wrapper code
 # is Python 3 compatible, so fix only the interpreter line in the extracted tree.
@@ -79,6 +71,16 @@ export CROSS_COMPILE="${CROSS_COMPILE:-aarch64-linux-gnu-}"
 export CROSS_COMPILE_ARM32="${CROSS_COMPILE_ARM32:-arm-linux-gnueabi-}"
 export CLANG_TRIPLE="${CLANG_TRIPLE:-aarch64-linux-gnu-}"
 export KCFLAGS="${KCFLAGS:--Wno-error=pointer-to-enum-cast -Wno-error=int-conversion -Wno-unused-variable -Wno-unused-function}"
+
+# Use the ARM64 GNU assembler for old vDSO assembly syntax. The source tree's
+# original -no-integrated-as flag otherwise falls back to the host /usr/bin/as.
+CROSS_AS="$(command -v "${CROSS_COMPILE}as" || true)"
+[[ -n "$CROSS_AS" ]] || die "ARM64 assembler not found: ${CROSS_COMPILE}as"
+CROSS_AS_PREFIX="$(dirname "$CROSS_AS")/${CROSS_COMPILE}"
+if grep -q -- '-no-integrated-as' "$KERNEL_DIR/Makefile"; then
+    sed -i "s|CLANG_FLAGS[[:space:]]*+=[[:space:]]*-no-integrated-as|CLANG_FLAGS += -no-integrated-as -B${CROSS_AS_PREFIX}|" \
+        "$KERNEL_DIR/Makefile"
+fi
 
 if [[ -n "${CLANG_BIN:-}" ]]; then
     [[ -x "$CLANG_BIN" ]] || die "CLANG_BIN is not executable: $CLANG_BIN"
