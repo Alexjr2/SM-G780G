@@ -215,7 +215,11 @@ cp -- "$STOCK_CONFIG_SOURCE" "$STOCK_CONFIG"
 sed -i 's|\$(KCONFIG_CONFIG)|$(srctree)/arch/arm64/configs/stock_R8Q|' "$KERNEL_DIR/kernel/Makefile"
 
 echo -e "${YELLOW}Building Image and DTB/DTBO files...${NC}"
-make -j"$JOBS" "${MAKE_ARGS[@]}" Image dtbs
+# This legacy Samsung/Qualcomm DTS set intentionally contains many old-style
+# properties that newer dtc reports as validation warnings. Filter only dtc
+# warning lines from the log; compiler/dtc errors remain visible and fatal.
+make -j"$JOBS" "${MAKE_ARGS[@]}" Image dtbs \
+    2> >(sed -E '/: Warning \([^)]*\)/d' >&2)
 
 IMAGE="$OUT_DIR/arch/arm64/boot/Image"
 [[ -f "$IMAGE" ]] || die "Kernel Image was not generated"
