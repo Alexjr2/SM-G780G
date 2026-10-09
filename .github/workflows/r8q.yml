@@ -8,7 +8,6 @@ permissions:
 
 env:
   KERNEL_SOURCE_URL: https://github.com/Alexjr2/SM-G780G/releases/download/kernelr8q/Kernel.tar.gz
-  CLANG_TOOLCHAIN_URL: https://github.com/Neutron-Toolchains/clang-build-catalogue/releases/download/05012024/neutron-clang-05012024.tar.zst
 
 jobs:
   build-r8q:
@@ -19,6 +18,8 @@ jobs:
       - name: Checkout build scripts
         uses: actions/checkout@main
         with:
+          # The Qualcomm WLAN Makefile runs git log on the checkout commit
+          # and its parent while generating BUILD_TAG.
           fetch-depth: 0
 
       - name: Install build dependencies
