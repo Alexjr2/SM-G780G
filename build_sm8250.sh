@@ -13,6 +13,8 @@ MAGISKBOOT_DIR="${MAGISKBOOT_DIR:-$OUT_DIR/magiskboot}"
 DEFCONFIG="${DEFCONFIG:-vendor/r8q_eur_open_defconfig}"
 JOBS="${JOBS:-$(nproc)}"
 STOCK_CONFIG_SOURCE="${STOCK_CONFIG_SOURCE:-$SCRIPT_DIR/stock_R8Q}"
+KSU_SETUP_URL="${KSU_SETUP_URL:-https://raw.githubusercontent.com/backslashxx/KernelSU/master/kernel/setup.sh}"
+KSU_REF="${KSU_REF:-master}"
 
 ORIGIN_BOOTIMG_URL="${ORIGIN_BOOTIMG_URL:-https://github.com/Alexjr2/SM-G780G/releases/download/originalboot/boot.img}"
 MAGISKBOOT_REPO="${MAGISKBOOT_REPO:-xiaoxindada/magisk_bins_ndk}"
@@ -32,7 +34,7 @@ need_cmd() {
     command -v "$1" >/dev/null 2>&1 || die "Required command not found: $1"
 }
 
-for cmd in make curl jq tar 7z; do
+for cmd in make curl jq tar 7z git; do
     need_cmd "$cmd"
 done
 
@@ -41,12 +43,24 @@ done
     die "Defconfig not found: arch/arm64/configs/$DEFCONFIG"
 [[ -x "$KERNEL_DIR/tools/mkdtimg" ]] || die "Missing executable: $KERNEL_DIR/tools/mkdtimg"
 [[ -x "$KERNEL_DIR/tools/dtc" ]] || die "Missing executable: $KERNEL_DIR/tools/dtc"
+[[ -f "$KERNEL_DIR/scripts/gcc-wrapper.py" ]] || die "Missing compiler wrapper: $KERNEL_DIR/scripts/gcc-wrapper.py"
+[[ -f "$KERNEL_DIR/scripts/mkcompile_h" ]] || die "Missing compile header generator: $KERNEL_DIR/scripts/mkcompile_h"
 
-export LOCALVERSION="${LOCALVERSION:--27223811}"
-export KBUILD_BUILD_USER="${KBUILD_BUILD_USER:-}"
-export KBUILD_BUILD_HOST="${KBUILD_BUILD_HOST:-}"
-export KBUILD_BUILD_VERSION="${KBUILD_BUILD_VERSION:-1}"
-export KBUILD_BUILD_TIMESTAMP="${KBUILD_BUILD_TIMESTAMP:-Tue Sep 30 19:38:09 KST 2025}"
+# This Samsung 4.19 tree invokes gcc-wrapper.py directly when CONFIG_CFP=y.
+# Its old Python 2 shebang is not available on Ubuntu 24.04; the wrapper code
+# is Python 3 compatible, so fix only the interpreter line in the extracted tree.
+sed -i '1s|python2|python3|' "$KERNEL_DIR/scripts/gcc-wrapper.py"
+
+# Keep the kernel identity equal to the stock build, even when the actual
+# build uses a downloaded Clang toolchain.
+sed -i '/LINUX_COMPILER/c\    echo \#define LINUX_COMPILER \"clang version 10.0.6 for Android NDK\"' \
+    "$KERNEL_DIR/scripts/mkcompile_h"
+
+export LOCALVERSION="-27223811"
+export KBUILD_BUILD_USER="dpi"
+export KBUILD_BUILD_HOST="21DKGA22"
+export KBUILD_BUILD_VERSION="1"
+export KBUILD_BUILD_TIMESTAMP="Tue Sep 30 19:38:09 KST 2025"
 export ARCH=arm64
 export SUBARCH=arm64
 export CROSS_COMPILE="${CROSS_COMPILE:-aarch64-linux-gnu-}"
@@ -88,6 +102,17 @@ echo -e "${BLUE}Defconfig     : $DEFCONFIG${NC}"
 rm -rf -- "$OUT_DIR"
 mkdir -p "$OUT_DIR"
 
+echo -e "${YELLOW}Adding backslashxx KernelSU...${NC}"
+(
+    cd "$KERNEL_DIR"
+    curl -LSs "$KSU_SETUP_URL" | bash -s "$KSU_REF"
+)
+[[ -d "$KERNEL_DIR/KernelSU" ]] || die "KernelSU setup did not create $KERNEL_DIR/KernelSU"
+[[ -L "$KERNEL_DIR/drivers/kernelsu" ]] || die "KernelSU driver symlink was not created"
+KSU_GIT_VERSION="$(git -C "$KERNEL_DIR/KernelSU" rev-list --count HEAD)"
+KERNELSU_VERSION=$((KSU_GIT_VERSION + 30000 - 84))
+echo -e "${GREEN}KernelSU version: $KERNELSU_VERSION${NC}"
+
 MAKE_ARGS=(
     -C "$KERNEL_DIR"
     O="$OUT_DIR"
@@ -101,6 +126,9 @@ MAKE_ARGS=(
     CONFIG_BUILD_ARM64_DT_OVERLAY=y
     HOSTCC=clang
     HOSTCXX=clang++
+    PYTHON=python3
+    PYTHON2=python3
+    PYTHON3=python3
     LD=ld.lld
     AR=llvm-ar
     NM=llvm-nm
@@ -115,6 +143,24 @@ MAKE_ARGS=(
 
 echo -e "${YELLOW}Preparing $DEFCONFIG...${NC}"
 make "${MAKE_ARGS[@]}" "$DEFCONFIG"
+
+echo -e "${YELLOW}Applying KernelSU configuration...${NC}"
+[[ -f "$KERNEL_DIR/scripts/config" ]] || die "Missing config helper: $KERNEL_DIR/scripts/config"
+bash "$KERNEL_DIR/scripts/config" --file "$OUT_DIR/.config" \
+    --enable KSU \
+    --enable KSU_HACK_ARM64_BRANCH_LINK \
+    --disable KSU_TAMPER_SYSCALL_TABLE \
+    --enable KSU_LSM_SECURITY_HOOKS \
+    --enable KSU_FEATURE_SULOG \
+    --enable KSU_FEATURE_ADBROOT \
+    --disable KSU_FEATURE_ADBROOT_DEFAULT_ENABLE \
+    --enable KSU_HOSTSREDIRECT \
+    --disable KSU_ENABLE_FULL_UID_CHECKS \
+    --enable KSU_THRONE_TRACKER_ALWAYS_THREADED \
+    --disable KSU_NOPRINTK \
+    --enable KSU_SHELL_HAS_SU_ALWAYS \
+    --disable KSU_DEBUG \
+    --enable KSU_HEURISTIC_IN_TREE_BUILD
 make "${MAKE_ARGS[@]}" olddefconfig
 
 echo -e "${YELLOW}Embedding stock_R8Q as /proc/config.gz...${NC}"
