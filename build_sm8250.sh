@@ -117,6 +117,17 @@ echo -e "${BLUE}Defconfig     : $DEFCONFIG${NC}"
 rm -rf -- "$OUT_DIR"
 mkdir -p "$OUT_DIR"
 
+# The pinned Neutron archive also contains an x86_64 GNU `ld` named `ld`.
+# Clang searches PATH for that name during vDSO linking and then rejects the
+# ARM64 emulation mode. Put an isolated `ld` alias in front of the toolchain,
+# pointing to the matching LLD binary instead of modifying the archive.
+LLD_BIN="$(command -v ld.lld || true)"
+[[ -x "$LLD_BIN" ]] || die "ld.lld was not found"
+LINKER_BIN="$OUT_DIR/linker-bin"
+mkdir -p "$LINKER_BIN"
+ln -sfn "$LLD_BIN" "$LINKER_BIN/ld"
+export PATH="$LINKER_BIN:$PATH"
+
 # Use the ARM64 GNU assembler for old vDSO assembly syntax. Put it behind a
 # plain `as` name in a private tool directory so Clang cannot fall back to the
 # host /usr/bin/as when -no-integrated-as is enabled by this old kernel tree.
