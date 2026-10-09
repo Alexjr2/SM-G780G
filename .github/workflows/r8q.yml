@@ -71,6 +71,7 @@ jobs:
         run: |
           set -euo pipefail
           chmod +x build_sm8250.sh
+          test -s stock_R8Q
           KERNEL_DIR="$GITHUB_WORKSPACE/kernel-source" \
           OUT_DIR="$GITHUB_WORKSPACE/out/r8q" \
           TOOLCHAIN_DIR="$GITHUB_WORKSPACE/llvm-21" \
