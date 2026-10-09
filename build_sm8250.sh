@@ -46,6 +46,18 @@ done
 [[ -f "$KERNEL_DIR/scripts/gcc-wrapper.py" ]] || die "Missing compiler wrapper: $KERNEL_DIR/scripts/gcc-wrapper.py"
 [[ -f "$KERNEL_DIR/scripts/mkcompile_h" ]] || die "Missing compile header generator: $KERNEL_DIR/scripts/mkcompile_h"
 
+# The release archive contains read-only source files. KernelSU and the
+# reproducible-build adjustments below must be able to edit this tree.
+chmod -R u+rwX "$KERNEL_DIR"
+
+# This old Android tree forces Clang to use the host assembler. That produces
+# '/usr/bin/as: unrecognized option -EL' on the ARM64 GitHub runner. Use
+# Clang's integrated ARM64 assembler instead.
+if grep -q -- '-no-integrated-as' "$KERNEL_DIR/Makefile"; then
+    sed -i 's|CLANG_FLAGS[[:space:]]*+=[[:space:]]*-no-integrated-as|CLANG_FLAGS +=|' \
+        "$KERNEL_DIR/Makefile"
+fi
+
 # This Samsung 4.19 tree invokes gcc-wrapper.py directly when CONFIG_CFP=y.
 # Its old Python 2 shebang is not available on Ubuntu 24.04; the wrapper code
 # is Python 3 compatible, so fix only the interpreter line in the extracted tree.
@@ -109,6 +121,10 @@ echo -e "${YELLOW}Adding backslashxx KernelSU...${NC}"
 )
 [[ -d "$KERNEL_DIR/KernelSU" ]] || die "KernelSU setup did not create $KERNEL_DIR/KernelSU"
 [[ -L "$KERNEL_DIR/drivers/kernelsu" ]] || die "KernelSU driver symlink was not created"
+grep -Fq 'obj-$(CONFIG_KSU) += kernelsu/' "$KERNEL_DIR/drivers/Makefile" || \
+    die "KernelSU Makefile entry was not added"
+grep -Fq 'drivers/kernelsu/Kconfig' "$KERNEL_DIR/drivers/Kconfig" || \
+    die "KernelSU Kconfig entry was not added"
 KSU_GIT_VERSION="$(git -C "$KERNEL_DIR/KernelSU" rev-list --count HEAD)"
 KERNELSU_VERSION=$((KSU_GIT_VERSION + 30000 - 84))
 echo -e "${GREEN}KernelSU version: $KERNELSU_VERSION${NC}"
