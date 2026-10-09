@@ -142,6 +142,10 @@ if grep -q -- '-no-integrated-as' "$KERNEL_DIR/Makefile"; then
     # only to KBUILD_AFLAGS used by .S/vDSO files.
     sed -E -i "s|^[[:space:]]*CLANG_FLAGS[[:space:]]*\+=[[:space:]]*-no-integrated-as|CLANG_FLAGS +=|" \
         "$KERNEL_DIR/Makefile"
+    # Clang otherwise follows its prefix and selects the archive's x86_64
+    # GNU bin/ld, even when PATH contains the LLD alias above.
+    sed -i "/^CLANG_FLAGS +=$/a CLANG_FLAGS += -fuse-ld=ld.lld" \
+        "$KERNEL_DIR/Makefile"
     sed -i "/^CLANG_FLAGS +=$/a KBUILD_AFLAGS += -no-integrated-as -B${AS_TOOL_DIR}/" \
         "$KERNEL_DIR/Makefile"
 fi
