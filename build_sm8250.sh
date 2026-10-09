@@ -85,7 +85,7 @@ export CROSS_COMPILE_ARM32="${CROSS_COMPILE_ARM32:-arm-linux-gnueabi-}"
 export CLANG_TRIPLE="${CLANG_TRIPLE:-aarch64-linux-gnu-}"
 # Keep CI output readable. `-w` suppresses warnings only; real compiler errors
 # remain visible and still stop the build.
-export KCFLAGS="${KCFLAGS:--w -Wno-error=pointer-to-enum-cast -Wno-error=int-conversion -Wno-error=strict-prototypes -Wno-unused-variable -Wno-unused-function}"
+export KCFLAGS="${KCFLAGS:--w -fno-builtin-stpcpy -Wno-error=pointer-to-enum-cast -Wno-error=int-conversion -Wno-error=strict-prototypes -Wno-unused-variable -Wno-unused-function}"
 
 if [[ -n "${CLANG_BIN:-}" ]]; then
     [[ -x "$CLANG_BIN" ]] || die "CLANG_BIN is not executable: $CLANG_BIN"
@@ -134,6 +134,16 @@ if grep -q -- '-no-integrated-as' "$KERNEL_DIR/Makefile"; then
     sed -i "/^CLANG_FLAGS +=$/a KBUILD_AFLAGS += -no-integrated-as -B${AS_TOOL_DIR}/" \
         "$KERNEL_DIR/Makefile"
 fi
+
+# genksyms in this 4.19 tree cannot generate a CRC for the GSI API when the
+# packed attribute is repeated on a by-value parameter. The union itself stays
+# packed; only the redundant parameter spelling is normalized, so its ABI and
+# layout are unchanged.
+GSI_HEADER="$KERNEL_DIR/include/linux/msm_gsi.h"
+GSI_SOURCE="$KERNEL_DIR/drivers/platform/msm/gsi/gsi.c"
+[[ -f "$GSI_HEADER" && -f "$GSI_SOURCE" ]] || die "GSI sources not found"
+sed -i 's/union __packed gsi_channel_scratch val/union gsi_channel_scratch val/g' \
+    "$GSI_HEADER" "$GSI_SOURCE"
 
 echo -e "${YELLOW}Adding backslashxx KernelSU...${NC}"
 (
