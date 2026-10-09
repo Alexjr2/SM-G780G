@@ -116,7 +116,11 @@ mkdir -p "$AS_TOOL_DIR"
 ln -sfn "$CROSS_AS" "$AS_TOOL_DIR/as"
 export PATH="$AS_TOOL_DIR:$PATH"
 if grep -q -- '-no-integrated-as' "$KERNEL_DIR/Makefile"; then
-    sed -E -i "s|CLANG_FLAGS[[:space:]]*\+=[[:space:]]*-no-integrated-as|CLANG_FLAGS += -no-integrated-as -B${AS_TOOL_DIR}/|" \
+    # Keep C compilation on Clang IAS; apply the legacy external assembler
+    # only to KBUILD_AFLAGS used by .S/vDSO files.
+    sed -E -i "s|^[[:space:]]*CLANG_FLAGS[[:space:]]*\+=[[:space:]]*-no-integrated-as|CLANG_FLAGS +=|" \
+        "$KERNEL_DIR/Makefile"
+    sed -i "/^CLANG_FLAGS +=$/a KBUILD_AFLAGS += -no-integrated-as -B${AS_TOOL_DIR}/" \
         "$KERNEL_DIR/Makefile"
 fi
 
