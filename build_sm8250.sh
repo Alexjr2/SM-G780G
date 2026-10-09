@@ -72,16 +72,6 @@ export CROSS_COMPILE_ARM32="${CROSS_COMPILE_ARM32:-arm-linux-gnueabi-}"
 export CLANG_TRIPLE="${CLANG_TRIPLE:-aarch64-linux-gnu-}"
 export KCFLAGS="${KCFLAGS:--Wno-error=pointer-to-enum-cast -Wno-error=int-conversion -Wno-unused-variable -Wno-unused-function}"
 
-# Use the ARM64 GNU assembler for old vDSO assembly syntax. The source tree's
-# original -no-integrated-as flag otherwise falls back to the host /usr/bin/as.
-CROSS_AS="$(command -v "${CROSS_COMPILE}as" || true)"
-[[ -n "$CROSS_AS" ]] || die "ARM64 assembler not found: ${CROSS_COMPILE}as"
-CROSS_AS_PREFIX="$(dirname "$CROSS_AS")/${CROSS_COMPILE}"
-if grep -q -- '-no-integrated-as' "$KERNEL_DIR/Makefile"; then
-    sed -i "s|CLANG_FLAGS[[:space:]]*+=[[:space:]]*-no-integrated-as|CLANG_FLAGS += -no-integrated-as -B${CROSS_AS_PREFIX}|" \
-        "$KERNEL_DIR/Makefile"
-fi
-
 if [[ -n "${CLANG_BIN:-}" ]]; then
     [[ -x "$CLANG_BIN" ]] || die "CLANG_BIN is not executable: $CLANG_BIN"
 elif [[ -x "$TOOLCHAIN_DIR/bin/clang" ]]; then
@@ -115,6 +105,19 @@ echo -e "${BLUE}Defconfig     : $DEFCONFIG${NC}"
 
 rm -rf -- "$OUT_DIR"
 mkdir -p "$OUT_DIR"
+
+# Use the ARM64 GNU assembler for old vDSO assembly syntax. Put it behind a
+# plain `as` name in a private tool directory so Clang cannot fall back to the
+# host /usr/bin/as when -no-integrated-as is enabled by this old kernel tree.
+CROSS_AS="$(command -v "${CROSS_COMPILE}as" || true)"
+[[ -n "$CROSS_AS" ]] || die "ARM64 assembler not found: ${CROSS_COMPILE}as"
+AS_TOOL_DIR="$OUT_DIR/assembler-bin"
+mkdir -p "$AS_TOOL_DIR"
+ln -sfn "$CROSS_AS" "$AS_TOOL_DIR/as"
+if grep -q -- '-no-integrated-as' "$KERNEL_DIR/Makefile"; then
+    sed -E -i "s|CLANG_FLAGS[[:space:]]*\+=[[:space:]]*-no-integrated-as|CLANG_FLAGS += -no-integrated-as -B${AS_TOOL_DIR}/|" \
+        "$KERNEL_DIR/Makefile"
+fi
 
 echo -e "${YELLOW}Adding backslashxx KernelSU...${NC}"
 (
