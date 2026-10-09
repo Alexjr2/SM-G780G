@@ -179,8 +179,8 @@ done
 KPERFMON_MAKEFILE="$KERNEL_DIR/drivers/kperfmon/Makefile"
 if [[ -f "$KPERFMON_MAKEFILE" ]]; then
     sed -i \
-        -e 's|\$(shell \[ -e \$(srctree)/../../system/core/liblog/include/log/perflog.h \] \&\& echo exist)|\$(shell if [ -e \$(srctree)/../../system/core/liblog/include/log/perflog.h ] || [ -e \$(srctree)/include/linux/perflog.h ]; then echo exist; fi)|g' \
-        -e 's|\$(shell cp -f \$(srctree)/../../system/core/liblog/include/log/perflog.h  \$(srctree)/include/linux/)|\$(shell if [ -e \$(srctree)/../../system/core/liblog/include/log/perflog.h ]; then cp -f \$(srctree)/../../system/core/liblog/include/log/perflog.h \$(srctree)/include/linux/; fi)|g' \
+        -e 's#\$(shell \[ -e \$(srctree)/../../system/core/liblog/include/log/perflog.h \] \&\& echo exist)#\$(shell if [ -e \$(srctree)/../../system/core/liblog/include/log/perflog.h ] || [ -e \$(srctree)/include/linux/perflog.h ]; then echo exist; fi)#g' \
+        -e 's#\$(shell cp -f \$(srctree)/../../system/core/liblog/include/log/perflog.h  \$(srctree)/include/linux/)#\$(shell if [ -e \$(srctree)/../../system/core/liblog/include/log/perflog.h ]; then cp -f \$(srctree)/../../system/core/liblog/include/log/perflog.h \$(srctree)/include/linux/; fi)#g' \
         "$KPERFMON_MAKEFILE"
 fi
 
