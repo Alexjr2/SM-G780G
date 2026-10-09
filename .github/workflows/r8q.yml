@@ -32,6 +32,7 @@ jobs:
             flex \
             gcc-aarch64-linux-gnu \
             gcc-arm-linux-gnueabi \
+            git \
             jq \
             libelf-dev \
             libncurses5-dev \
