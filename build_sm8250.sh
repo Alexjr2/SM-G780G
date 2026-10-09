@@ -16,6 +16,11 @@ STOCK_CONFIG_SOURCE="${STOCK_CONFIG_SOURCE:-$SCRIPT_DIR/stock_R8Q}"
 KSU_SETUP_URL="${KSU_SETUP_URL:-https://raw.githubusercontent.com/backslashxx/KernelSU/master/kernel/setup.sh}"
 KSU_REF="${KSU_REF:-master}"
 CLANG_TOOLCHAIN_URL="${CLANG_TOOLCHAIN_URL:-}"
+# The vendor CFP post-link instrumenter requires Samsung's patched LLVM. The
+# generic Neutron toolchain cannot run it reliably, so disable CFP by default
+# for this standalone build. Set CFP_ENABLE=1 only with the original Samsung
+# CFP toolchain.
+CFP_ENABLE="${CFP_ENABLE:-0}"
 
 ORIGIN_BOOTIMG_URL="${ORIGIN_BOOTIMG_URL:-https://github.com/Alexjr2/SM-G780G/releases/download/originalboot/boot.img}"
 MAGISKBOOT_REPO="${MAGISKBOOT_REPO:-xiaoxindada/magisk_bins_ndk}"
@@ -38,6 +43,9 @@ need_cmd() {
 for cmd in make curl jq tar 7z git; do
     need_cmd "$cmd"
 done
+
+[[ "$CFP_ENABLE" == "0" || "$CFP_ENABLE" == "1" ]] || \
+    die "CFP_ENABLE must be 0 or 1 (got: $CFP_ENABLE)"
 
 [[ -f "$KERNEL_DIR/Makefile" ]] || die "Kernel source not found: $KERNEL_DIR"
 [[ -f "$KERNEL_DIR/arch/arm64/configs/$DEFCONFIG" ]] || \
@@ -127,7 +135,10 @@ echo -e "${BLUE}Defconfig     : $DEFCONFIG${NC}"
 rm -rf -- "$OUT_DIR"
 mkdir -p "$OUT_DIR"
 
-# The vendor CFP post-link instrumenter derives objdump/nm from CROSS_COMPILE.
+if [[ "$CFP_ENABLE" == "1" ]]; then
+    echo -e "${YELLOW}CFP enabled: selecting GNU ARM64 binutils...${NC}"
+
+    # The vendor CFP post-link instrumenter derives objdump/nm from CROSS_COMPILE.
 # With a Clang toolchain prepended to PATH, those names can resolve to LLVM
 # binaries. This old Python instrumenter uses stdout pipes that LLVM's tools
 # do not tolerate when it stops reading a stream, producing a fatal-looking
@@ -177,7 +188,10 @@ if grep -Fq "CROSS_COMPILE = os.environ.get('CROSS_COMPILE')" "$CFP_INSTRUMENT";
 elif ! grep -Fq "os.environ.get('CFP_CROSS_COMPILE'" "$CFP_INSTRUMENT"; then
     die "Unsupported CFP instrumenter: cannot select GNU binutils"
 fi
-echo -e "${BLUE}CFP binutils  : ${CFP_CROSS_COMPILE}objdump / ${CFP_CROSS_COMPILE}nm${NC}"
+    echo -e "${BLUE}CFP binutils  : ${CFP_CROSS_COMPILE}objdump / ${CFP_CROSS_COMPILE}nm${NC}"
+else
+    echo -e "${YELLOW}CFP disabled: generic Clang cannot run Samsung's CFP instrumenter${NC}"
+fi
 
 # Use the ARM64 GNU assembler for old vDSO assembly syntax. Put it behind a
 # plain `as` name in a private tool directory so Clang cannot fall back to the
@@ -303,7 +317,29 @@ bash "$KERNEL_DIR/scripts/config" --file "$OUT_DIR/.config" \
     --enable KSU_SHELL_HAS_SU_ALWAYS \
     --disable KSU_DEBUG \
     --enable KSU_HEURISTIC_IN_TREE_BUILD
+
+if [[ "$CFP_ENABLE" == "1" ]]; then
+    echo -e "${YELLOW}Keeping vendor CFP enabled...${NC}"
+else
+    echo -e "${YELLOW}Disabling vendor CFP for standalone build...${NC}"
+    bash "$KERNEL_DIR/scripts/config" --file "$OUT_DIR/.config" \
+        --disable CFP \
+        --disable CFP_JOPP \
+        --disable CFP_ROPP \
+        --disable CFP_ROPP_SYSREGKEY \
+        --disable CFP_ROPP_RANDKEY \
+        --disable CFP_ROPP_FIXKEY \
+        --disable CFP_ROPP_ZEROKEY \
+        --disable CFP_TEST
+fi
 make "${MAKE_ARGS[@]}" olddefconfig
+
+if [[ "$CFP_ENABLE" == "1" ]]; then
+    grep -q '^CONFIG_CFP=y$' "$OUT_DIR/.config" || die "CFP_ENABLE=1 but CONFIG_CFP is not enabled"
+else
+    grep -q '^CONFIG_CFP=y$' "$OUT_DIR/.config" && \
+        die "CFP was requested disabled but CONFIG_CFP remains enabled"
+fi
 
 echo -e "${YELLOW}Embedding stock_R8Q as /proc/config.gz...${NC}"
 STOCK_CONFIG="$KERNEL_DIR/arch/arm64/configs/stock_R8Q"
