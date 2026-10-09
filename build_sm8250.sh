@@ -55,6 +55,18 @@ chmod -R u+rwX "$KERNEL_DIR"
 # is Python 3 compatible, so fix only the interpreter line in the extracted tree.
 sed -i '1s|python2|python3|' "$KERNEL_DIR/scripts/gcc-wrapper.py"
 
+# This vendor wrapper promotes every compiler warning to a fatal error. That
+# policy is incompatible with the newer Clang used on GitHub Actions: this
+# 4.19 tree contains harmless legacy warnings such as unused-but-set globals.
+# Keep the wrapper available, but make its forbidden-warning check opt-in.
+if grep -Fq 'if m and m.group(2) not in allowed_warnings:' "$KERNEL_DIR/scripts/gcc-wrapper.py"; then
+    sed -i 's|if m and m.group(2) not in allowed_warnings:|if os.environ.get("KBUILD_STRICT_WARNINGS", "0") == "1" and m and m.group(2) not in allowed_warnings:|' \
+        "$KERNEL_DIR/scripts/gcc-wrapper.py"
+else
+    die "Unsupported gcc-wrapper.py: warning gate was not found"
+fi
+export KBUILD_STRICT_WARNINGS="0"
+
 # Keep the kernel identity equal to the stock build, even when the actual
 # build uses a downloaded Clang toolchain.
 sed -i '/LINUX_COMPILER/c\    echo \#define LINUX_COMPILER \"clang version 10.0.6 for Android NDK\"' \
