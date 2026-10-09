@@ -66,6 +66,12 @@ if grep -Fq 'if m and m.group(2) not in allowed_warnings:' "$KERNEL_DIR/scripts/
 else
     die "Unsupported gcc-wrapper.py: warning gate was not found"
 fi
+# The vendor wrapper reprinted compiler stderr on stdout. That bypassed the
+# build log capture below and made every warning visible in Actions. Keep the
+# diagnostics on stderr, where they can be summarized only when the build
+# actually fails.
+sed -i 's|^[[:space:]]*print(line)$|            print(line, file=sys.stderr, end="")|' \
+    "$KERNEL_DIR/scripts/gcc-wrapper.py"
 export KBUILD_STRICT_WARNINGS="0"
 
 # Keep the kernel identity equal to the stock build, even when the actual
@@ -139,15 +145,44 @@ if grep -q -- '-no-integrated-as' "$KERNEL_DIR/Makefile"; then
         "$KERNEL_DIR/Makefile"
 fi
 
-# genksyms in this 4.19 tree cannot generate a CRC for the GSI API when the
-# packed attribute is repeated on a by-value parameter. The union itself stays
-# packed; only the redundant parameter spelling is normalized, so its ABI and
-# layout are unchanged.
+# genksyms in this 4.19 tree cannot parse the packed return type of the helper
+# immediately preceding gsi_write_channel_scratch(). That makes genksyms omit
+# the CRC, after which ld.lld fails on __crc_gsi_write_channel_scratch. The
+# returned union remains packed; __packed is only removed from the return-type
+# spelling, so its layout and ABI are unchanged.
 GSI_HEADER="$KERNEL_DIR/include/linux/msm_gsi.h"
 GSI_SOURCE="$KERNEL_DIR/drivers/platform/msm/gsi/gsi.c"
 [[ -f "$GSI_HEADER" && -f "$GSI_SOURCE" ]] || die "GSI sources not found"
-sed -i 's/union __packed gsi_channel_scratch val/union gsi_channel_scratch val/g' \
-    "$GSI_HEADER" "$GSI_SOURCE"
+sed -i 's/static union __packed gsi_channel_scratch __gsi_update_mhi_channel_scratch/static union gsi_channel_scratch __gsi_update_mhi_channel_scratch/' \
+    "$GSI_SOURCE"
+
+# This Samsung tree was normally built from a larger Android checkout. In the
+# standalone kernel archive the Android helper secgetspf is absent; make its
+# optional feature probes return empty instead of emitting command-not-found
+# noise during every make invocation.
+SECGETSPF_FILES=(
+    "$KERNEL_DIR/Makefile"
+    "$KERNEL_DIR/drivers/net/wireless/qualcomm/qca6390/qcacld-3.0/Kbuild"
+)
+for secgetspf_file in "${SECGETSPF_FILES[@]}"; do
+    [[ -f "$secgetspf_file" ]] || continue
+    sed -i \
+        -e 's|\$(shell secgetspf SEC_PRODUCT_FEATURE_BIOAUTH_CONFIG_FINGERPRINT_TZ)|\$(shell if command -v secgetspf >/dev/null 2>\&1; then secgetspf SEC_PRODUCT_FEATURE_BIOAUTH_CONFIG_FINGERPRINT_TZ; fi)|g' \
+        -e 's|\$(shell secgetspf SEC_PRODUCT_FEATURE_COMMON_CONFIG_SEP_VERSION)|\$(shell if command -v secgetspf >/dev/null 2>\&1; then secgetspf SEC_PRODUCT_FEATURE_COMMON_CONFIG_SEP_VERSION; fi)|g' \
+        -e 's|\$(shell secgetspf SEC_PRODUCT_FEATURE_WLAN_SUPPORT_MIMO)|\$(shell if command -v secgetspf >/dev/null 2>\&1; then secgetspf SEC_PRODUCT_FEATURE_WLAN_SUPPORT_MIMO; fi)|g' \
+        "$secgetspf_file"
+done
+
+# kperfmon already ships the needed perflog.h inside this kernel archive. Its
+# Makefile nevertheless unconditionally copies a header from the absent
+# Android system/core checkout; use the in-tree header as the fallback.
+KPERFMON_MAKEFILE="$KERNEL_DIR/drivers/kperfmon/Makefile"
+if [[ -f "$KPERFMON_MAKEFILE" ]]; then
+    sed -i \
+        -e 's|\$(shell \[ -e \$(srctree)/../../system/core/liblog/include/log/perflog.h \] \&\& echo exist)|\$(shell if [ -e \$(srctree)/../../system/core/liblog/include/log/perflog.h ] || [ -e \$(srctree)/include/linux/perflog.h ]; then echo exist; fi)|g' \
+        -e 's|\$(shell cp -f \$(srctree)/../../system/core/liblog/include/log/perflog.h  \$(srctree)/include/linux/)|\$(shell if [ -e \$(srctree)/../../system/core/liblog/include/log/perflog.h ]; then cp -f \$(srctree)/../../system/core/liblog/include/log/perflog.h \$(srctree)/include/linux/; fi)|g' \
+        "$KPERFMON_MAKEFILE"
+fi
 
 echo -e "${YELLOW}Adding backslashxx KernelSU...${NC}"
 (
@@ -229,11 +264,23 @@ cp -- "$STOCK_CONFIG_SOURCE" "$STOCK_CONFIG"
 sed -i 's|\$(KCONFIG_CONFIG)|$(srctree)/arch/arm64/configs/stock_R8Q|' "$KERNEL_DIR/kernel/Makefile"
 
 echo -e "${YELLOW}Building Image and DTB/DTBO files...${NC}"
-# This legacy Samsung/Qualcomm DTS set intentionally contains many old-style
-# properties that newer dtc reports as validation warnings. Filter only dtc
-# warning lines from the log; compiler/dtc errors remain visible and fatal.
-make -j"$JOBS" "${MAKE_ARGS[@]}" Image dtbs \
-    2> >(sed -E '/: Warning \([^)]*\)/d' >&2)
+# Keep compiler stderr in a file so legacy dtc/compiler warnings do not flood
+# Actions. There is no pipe in the compiler path, so parallel Clang jobs cannot
+# fail with a misleading broken-pipe diagnostic. On failure, print only the
+# actionable error lines and retain the complete stderr log for inspection.
+BUILD_STDERR="$OUT_DIR/build.stderr.log"
+if ! make -j"$JOBS" "${MAKE_ARGS[@]}" Image dtbs 2>"$BUILD_STDERR"; then
+    echo -e "${RED}Kernel build failed; relevant diagnostics:${NC}" >&2
+    if grep -Eq 'error:|fatal error:|LLVM ERROR|undefined symbol|ld\.lld: error|make(\[[0-9]+\])?: \*\*\*' \
+        "$BUILD_STDERR"; then
+        grep -E 'error:|fatal error:|LLVM ERROR|undefined symbol|ld\.lld: error|make(\[[0-9]+\])?: \*\*\*' \
+            "$BUILD_STDERR" | tail -n 120 >&2
+    else
+        tail -n 120 "$BUILD_STDERR" >&2
+    fi
+    echo -e "${YELLOW}Full stderr log: $BUILD_STDERR${NC}" >&2
+    exit 1
+fi
 
 IMAGE="$OUT_DIR/arch/arm64/boot/Image"
 [[ -f "$IMAGE" ]] || die "Kernel Image was not generated"
