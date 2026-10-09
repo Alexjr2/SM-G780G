@@ -82,7 +82,7 @@ export SUBARCH=arm64
 export CROSS_COMPILE="${CROSS_COMPILE:-aarch64-linux-gnu-}"
 export CROSS_COMPILE_ARM32="${CROSS_COMPILE_ARM32:-arm-linux-gnueabi-}"
 export CLANG_TRIPLE="${CLANG_TRIPLE:-aarch64-linux-gnu-}"
-export KCFLAGS="${KCFLAGS:--Wno-error=pointer-to-enum-cast -Wno-error=int-conversion -Wno-unused-variable -Wno-unused-function}"
+export KCFLAGS="${KCFLAGS:--Wno-error=pointer-to-enum-cast -Wno-error=int-conversion -Wno-error=strict-prototypes -Wno-unused-variable -Wno-unused-function}"
 
 if [[ -n "${CLANG_BIN:-}" ]]; then
     [[ -x "$CLANG_BIN" ]] || die "CLANG_BIN is not executable: $CLANG_BIN"
