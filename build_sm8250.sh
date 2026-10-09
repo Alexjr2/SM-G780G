@@ -153,7 +153,15 @@ install_external_kernelsu() {
         die "KernelSU Kconfig entry was not added"
 
     KSU_GIT_VERSION="$(git -C "$KERNEL_DIR/KernelSU" rev-list --count HEAD)"
-    echo -e "${GREEN}External KernelSU commits: $KSU_GIT_VERSION${NC}"
+    [[ "$KSU_GIT_VERSION" =~ ^[0-9]+$ ]] || \
+        die "Invalid KernelSU commit count: $KSU_GIT_VERSION"
+
+    # Keep the version calculation used by the previous builder. The raw
+    # commit count is useful for auditing, but it is not the KernelSU version
+    # shown in the old build output.
+    KERNELSU_VERSION=$((KSU_GIT_VERSION + 30000 - 84))
+    echo -e "${GREEN}KernelSU git commits: $KSU_GIT_VERSION${NC}"
+    echo -e "${GREEN}KernelSU version: $KERNELSU_VERSION${NC}"
 }
 
 TEMP_DEFCONFIG="$KERNEL_DIR/arch/arm64/configs/$DEFCONFIG"
