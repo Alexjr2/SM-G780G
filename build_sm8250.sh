@@ -127,6 +127,58 @@ echo -e "${BLUE}Defconfig     : $DEFCONFIG${NC}"
 rm -rf -- "$OUT_DIR"
 mkdir -p "$OUT_DIR"
 
+# The vendor CFP post-link instrumenter derives objdump/nm from CROSS_COMPILE.
+# With a Clang toolchain prepended to PATH, those names can resolve to LLVM
+# binaries. This old Python instrumenter uses stdout pipes that LLVM's tools
+# do not tolerate when it stops reading a stream, producing a fatal-looking
+# `LLVM ERROR: IO failure on output stream: Broken pipe` after vmlinux links.
+# Keep Clang for compilation, but force CFP to use GNU ARM64 binutils.
+is_gnu_binutils() {
+    local tool_version
+    tool_version="$("$1" --version 2>&1 | sed -n '1p')"
+    [[ "$tool_version" == *GNU* && "$tool_version" != *LLVM* ]]
+}
+
+CFP_CROSS_COMPILE="${CFP_CROSS_COMPILE:-}"
+if [[ -z "$CFP_CROSS_COMPILE" ]]; then
+    for candidate in /usr/bin/aarch64-linux-gnu- /usr/local/bin/aarch64-linux-gnu-; do
+        if [[ -x "${candidate}objdump" && -x "${candidate}nm" ]] && \
+           is_gnu_binutils "${candidate}objdump" && is_gnu_binutils "${candidate}nm"; then
+            CFP_CROSS_COMPILE="$candidate"
+            break
+        fi
+    done
+fi
+
+if [[ -z "$CFP_CROSS_COMPILE" ]]; then
+    CFP_OBJDUMP_BIN="$(command -v "${CROSS_COMPILE}objdump" || true)"
+    CFP_NM_BIN="$(command -v "${CROSS_COMPILE}nm" || true)"
+    if [[ -n "$CFP_OBJDUMP_BIN" && -n "$CFP_NM_BIN" ]] && \
+       is_gnu_binutils "$CFP_OBJDUMP_BIN" && is_gnu_binutils "$CFP_NM_BIN"; then
+        CFP_CROSS_COMPILE="${CFP_OBJDUMP_BIN%objdump}"
+    fi
+fi
+
+[[ -n "$CFP_CROSS_COMPILE" ]] || \
+    die "GNU ARM64 binutils required by CFP (aarch64-linux-gnu-objdump/nm) were not found"
+[[ -x "${CFP_CROSS_COMPILE}objdump" && -x "${CFP_CROSS_COMPILE}nm" ]] || \
+    die "Invalid CFP_CROSS_COMPILE: $CFP_CROSS_COMPILE"
+is_gnu_binutils "${CFP_CROSS_COMPILE}objdump" || \
+    die "CFP objdump is not GNU binutils: ${CFP_CROSS_COMPILE}objdump"
+is_gnu_binutils "${CFP_CROSS_COMPILE}nm" || \
+    die "CFP nm is not GNU binutils: ${CFP_CROSS_COMPILE}nm"
+export CFP_CROSS_COMPILE
+
+CFP_INSTRUMENT="$KERNEL_DIR/scripts/cfp/instrument.py"
+[[ -f "$CFP_INSTRUMENT" ]] || die "Missing CFP instrumenter: $CFP_INSTRUMENT"
+if grep -Fq "CROSS_COMPILE = os.environ.get('CROSS_COMPILE')" "$CFP_INSTRUMENT"; then
+    sed -i "s|CROSS_COMPILE = os.environ.get('CROSS_COMPILE')|CROSS_COMPILE = os.environ.get('CFP_CROSS_COMPILE', os.environ.get('CROSS_COMPILE'))|" \
+        "$CFP_INSTRUMENT"
+elif ! grep -Fq "os.environ.get('CFP_CROSS_COMPILE'" "$CFP_INSTRUMENT"; then
+    die "Unsupported CFP instrumenter: cannot select GNU binutils"
+fi
+echo -e "${BLUE}CFP binutils  : ${CFP_CROSS_COMPILE}objdump / ${CFP_CROSS_COMPILE}nm${NC}"
+
 # Use the ARM64 GNU assembler for old vDSO assembly syntax. Put it behind a
 # plain `as` name in a private tool directory so Clang cannot fall back to the
 # host /usr/bin/as when -no-integrated-as is enabled by this old kernel tree.
