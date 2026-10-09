@@ -19,7 +19,7 @@ jobs:
       - name: Checkout build scripts
         uses: actions/checkout@main
         with:
-          fetch-depth: 1
+          fetch-depth: 0
 
       - name: Install build dependencies
         run: |
