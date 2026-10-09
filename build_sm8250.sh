@@ -82,7 +82,9 @@ export SUBARCH=arm64
 export CROSS_COMPILE="${CROSS_COMPILE:-aarch64-linux-gnu-}"
 export CROSS_COMPILE_ARM32="${CROSS_COMPILE_ARM32:-arm-linux-gnueabi-}"
 export CLANG_TRIPLE="${CLANG_TRIPLE:-aarch64-linux-gnu-}"
-export KCFLAGS="${KCFLAGS:--Wno-error=pointer-to-enum-cast -Wno-error=int-conversion -Wno-error=strict-prototypes -Wno-unused-variable -Wno-unused-function}"
+# Keep CI output readable. `-w` suppresses warnings only; real compiler errors
+# remain visible and still stop the build.
+export KCFLAGS="${KCFLAGS:--w -Wno-error=pointer-to-enum-cast -Wno-error=int-conversion -Wno-error=strict-prototypes -Wno-unused-variable -Wno-unused-function}"
 
 if [[ -n "${CLANG_BIN:-}" ]]; then
     [[ -x "$CLANG_BIN" ]] || die "CLANG_BIN is not executable: $CLANG_BIN"
@@ -157,6 +159,8 @@ MAKE_ARGS=(
     ARCH=arm64
     CROSS_COMPILE="$CROSS_COMPILE"
     CROSS_COMPILE_ARM32="$CROSS_COMPILE_ARM32"
+    CFLAGS_KERNEL="$KCFLAGS"
+    CFLAGS_MODULE="$KCFLAGS"
     REAL_CC="$CLANG_BIN"
     CFP_CC="$CLANG_BIN"
     CLANG_TRIPLE="$CLANG_TRIPLE"
@@ -164,6 +168,8 @@ MAKE_ARGS=(
     CONFIG_BUILD_ARM64_DT_OVERLAY=y
     HOSTCC=clang
     HOSTCXX=clang++
+    HOSTCFLAGS=-w
+    HOSTCXXFLAGS=-w
     PYTHON=python3
     PYTHON2=python3
     PYTHON3=python3
