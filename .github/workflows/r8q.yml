@@ -1,0 +1,127 @@
+name: Build r8q kernel
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  KERNEL_SOURCE_URL: https://github.com/Alexjr2/SM-G780G/releases/download/kernelr8q/Kernel.tar.gz
+
+jobs:
+  build-r8q:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout build scripts
+        uses: actions/checkout@main
+        with:
+          fetch-depth: 1
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            bc \
+            bison \
+            build-essential \
+            ccache \
+            clang \
+            flex \
+            gcc-aarch64-linux-gnu \
+            gcc-arm-linux-gnueabi \
+            jq \
+            libelf-dev \
+            libncurses5-dev \
+            libncursesw5-dev \
+            libssl-dev \
+            lld \
+            llvm \
+            p7zip-full \
+            python3 \
+            tar \
+            xz-utils \
+            zstd \
+            curl
+
+      - name: Download kernel source archive
+        run: |
+          set -euo pipefail
+          rm -rf kernel-source Kernel.tar.gz
+          mkdir -p kernel-source
+          curl -fL --retry 3 "$KERNEL_SOURCE_URL" -o Kernel.tar.gz
+          tar -xzf Kernel.tar.gz -C kernel-source
+          test -f kernel-source/Makefile
+          test -f kernel-source/arch/arm64/configs/vendor/r8q_eur_open_defconfig
+          test -x kernel-source/tools/dtc
+          test -x kernel-source/tools/mkdtimg
+
+      - name: Build r8q kernel
+        run: |
+          set -euo pipefail
+          chmod +x build_sm8250.sh
+          test -s stock_R8Q
+          KERNEL_DIR="$GITHUB_WORKSPACE/kernel-source" \
+          OUT_DIR="$GITHUB_WORKSPACE/out/r8q" \
+          TOOLCHAIN_DIR="$GITHUB_WORKSPACE/clang-toolchain" \
+          DOWNLOAD_TOOLCHAIN=1 \
+          ./build_sm8250.sh
+
+      - name: Prepare release metadata
+        run: |
+          set -euo pipefail
+
+          TAR_FILE=$(find "$GITHUB_WORKSPACE/out/r8q" \
+            -maxdepth 1 \
+            -type f \
+            -name 'r8q-*-kernel.tar' \
+            -print -quit)
+
+          if [ -z "$TAR_FILE" ]; then
+            echo "r8q kernel image was not found"
+            find "$GITHUB_WORKSPACE/out/r8q" -maxdepth 3 -type f -print
+            exit 1
+          fi
+
+          IMAGE_NAME=$(basename "$TAR_FILE")
+          KERNEL_VERSION=$(cat out/r8q/include/config/kernel.release)
+          CLANG_VERSION=$(PATH="$GITHUB_WORKSPACE/clang-toolchain/bin:$PATH" clang --version | head -n1)
+          LLD_VERSION=$(PATH="$GITHUB_WORKSPACE/clang-toolchain/bin:$PATH" ld.lld --version | head -n1)
+          BUILD_TIME=$(TZ='Asia/Shanghai' date +"%Y-%m-%d %H:%M:%S")
+          IMAGE_SHA256=$(sha256sum "$TAR_FILE" | awk '{print $1}')
+          IMAGE_SIZE=$(du -h "$TAR_FILE" | awk '{print $1}')
+          SOURCE_SHA256=$(sha256sum Kernel.tar.gz | awk '{print $1}')
+
+          printf '%s\n' "$KERNEL_VERSION" > out/KERNEL_VERSION.txt
+          printf '%s\n' "$IMAGE_NAME" > out/IMAGE_NAME.txt
+          printf '%s\n' "$SOURCE_SHA256" > out/KERNEL_SOURCE_SHA256.txt
+
+          {
+            echo "# r8q Kernel Build"
+            echo
+            echo "- **Build Time**: $BUILD_TIME (Asia/Shanghai)"
+            echo "- **Device Codename**: r8q"
+            echo "- **Linux Version**: $KERNEL_VERSION"
+            echo "- **Kernel Image**: $IMAGE_NAME"
+            echo "- **Image Size**: $IMAGE_SIZE"
+            echo "- **Image SHA-256**: $IMAGE_SHA256"
+            echo "- **Source SHA-256**: $SOURCE_SHA256"
+            echo "- **Clang Version**: $CLANG_VERSION"
+            echo "- **LLD Version**: $LLD_VERSION"
+            echo
+            echo "**Done!**"
+          } > out/RELEASE.md
+
+          echo "KERNEL_VERSION=$KERNEL_VERSION" >> "$GITHUB_ENV"
+          echo "IMAGE_NAME=$IMAGE_NAME" >> "$GITHUB_ENV"
+
+      - name: Upload to release
+        uses: ncipollo/release-action@main
+        with:
+          artifacts: "${{ github.workspace }}/out/r8q/r8q-*-kernel.tar,${{ github.workspace }}/out/*.txt"
+          name: "Kernel-${{ env.KERNEL_VERSION }}-${{ github.run_id }}"
+          tag: "${{ github.run_id }}"
+          bodyFile: "${{ github.workspace }}/out/RELEASE.md"
+          allowUpdates: true
