@@ -15,6 +15,7 @@ JOBS="${JOBS:-$(nproc)}"
 STOCK_CONFIG_SOURCE="${STOCK_CONFIG_SOURCE:-$SCRIPT_DIR/stock_R8Q}"
 KSU_SETUP_URL="${KSU_SETUP_URL:-https://raw.githubusercontent.com/backslashxx/KernelSU/master/kernel/setup.sh}"
 KSU_REF="${KSU_REF:-master}"
+CLANG_TOOLCHAIN_URL="${CLANG_TOOLCHAIN_URL:-https://github.com/Neutron-Toolchains/clang-build-catalogue/releases/download/05012024/neutron-clang-05012024.tar.zst}"
 
 ORIGIN_BOOTIMG_URL="${ORIGIN_BOOTIMG_URL:-https://github.com/Alexjr2/SM-G780G/releases/download/originalboot/boot.img}"
 MAGISKBOOT_REPO="${MAGISKBOOT_REPO:-xiaoxindada/magisk_bins_ndk}"
@@ -97,11 +98,7 @@ else
 
     echo -e "${YELLOW}Clang toolchain not found; downloading the latest Neutron toolchain...${NC}"
     mkdir -p "$TOOLCHAIN_DIR"
-    TOOLCHAIN_URL="${CLANG_TOOLCHAIN_URL:-}"
-    if [[ -z "$TOOLCHAIN_URL" ]]; then
-        TOOLCHAIN_URL="$(curl -fsSL "https://api.github.com/repos/Neutron-Toolchains/clang-build-catalogue/releases/latest" \
-            | jq -r '[.assets[] | select(.name | endswith(".tar.zst"))][0].browser_download_url // empty')"
-    fi
+    TOOLCHAIN_URL="$CLANG_TOOLCHAIN_URL"
     [[ -n "$TOOLCHAIN_URL" ]] || die "Could not find a .tar.zst Clang release"
     curl -fL --retry 3 "$TOOLCHAIN_URL" \
         | tar --zstd -x -C "$TOOLCHAIN_DIR" --strip-components=1
