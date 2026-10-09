@@ -69,7 +69,7 @@ export KBUILD_STRICT_WARNINGS="0"
 
 # Keep the kernel identity equal to the stock build, even when the actual
 # build uses a downloaded Clang toolchain.
-sed -i '/LINUX_COMPILER/c\    echo \#define LINUX_COMPILER \"clang version 10.0.6 for Android NDK\"' \
+sed -i "/LINUX_COMPILER/c\\  echo '#define LINUX_COMPILER \"clang version 10.0.6 for Android NDK\"'" \
     "$KERNEL_DIR/scripts/mkcompile_h"
 
 export LOCALVERSION="-27223811"
