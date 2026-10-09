@@ -7,7 +7,8 @@ permissions:
   contents: write
 
 env:
-  KERNEL_SOURCE_URL: https://github.com/Alexjr2/SM-G780G/releases/download/kernelr8q/Kernel.tar.gz
+  KERNEL_SOURCE_REPO: https://github.com/azrim/android_kernel_samsung_sm8250.git
+  KERNEL_SOURCE_REF: 16
 
 jobs:
   build-r8q:
@@ -16,7 +17,7 @@ jobs:
 
     steps:
       - name: Checkout build scripts
-        uses: actions/checkout@main
+        uses: actions/checkout@v4
         with:
           # The Qualcomm WLAN Makefile runs git log on the checkout commit
           # and its parent while generating BUILD_TAG.
@@ -49,28 +50,43 @@ jobs:
             zstd \
             curl
 
-      - name: Download kernel source archive
+      - name: Clone kernel source
         run: |
           set -euo pipefail
-          rm -rf kernel-source Kernel.tar.gz
-          mkdir -p kernel-source
-          curl -fL --retry 3 "$KERNEL_SOURCE_URL" -o Kernel.tar.gz
-          tar -xzf Kernel.tar.gz -C kernel-source
+          rm -rf kernel-source
+          git clone \
+            --branch "$KERNEL_SOURCE_REF" \
+            --recurse-submodules \
+            --shallow-submodules \
+            "$KERNEL_SOURCE_REPO" \
+            kernel-source
           test -f kernel-source/Makefile
-          test -f kernel-source/arch/arm64/configs/vendor/r8q_eur_open_defconfig
+          test -f kernel-source/arch/arm64/configs/vendor/kona-sec-perf_defconfig
+          test -f kernel-source/arch/arm64/configs/vendor/samsung/r8q.config
           test -x kernel-source/tools/dtc
           test -x kernel-source/tools/mkdtimg
+          test -f kernel-source/mkbootimg/mkbootimg.py
 
       - name: Build r8q kernel
         run: |
           set -euo pipefail
           chmod +x build_sm8250.sh
-          test -s stock_R8Q
           KERNEL_DIR="$GITHUB_WORKSPACE/kernel-source" \
           OUT_DIR="$GITHUB_WORKSPACE/out/r8q" \
-          TOOLCHAIN_DIR="$GITHUB_WORKSPACE/clang-toolchain" \
-          DOWNLOAD_TOOLCHAIN=1 \
+          TOOLCHAIN_DIR="$GITHUB_WORKSPACE/llvm-21" \
+          CLANG_TOOLCHAIN_URL="https://github.com/Ylarod/setup-ndk-clang/releases/download/prebuilt/clang-linux-x86-ndk-r29-r563880c.tar.zst" \
           ./build_sm8250.sh
+
+      - name: Upload build diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: r8q-build-diagnostics
+          path: |
+            out/r8q/build.stderr.log
+            out/r8q/.config
+            out/r8q/include/config/kernel.release
+          if-no-files-found: warn
 
       - name: Prepare release metadata
         run: |
@@ -90,16 +106,16 @@ jobs:
 
           IMAGE_NAME=$(basename "$TAR_FILE")
           KERNEL_VERSION=$(cat out/r8q/include/config/kernel.release)
-          CLANG_VERSION=$(PATH="$GITHUB_WORKSPACE/clang-toolchain/bin:$PATH" clang --version | head -n1)
-          LLD_VERSION=$(PATH="$GITHUB_WORKSPACE/clang-toolchain/bin:$PATH" ld.lld --version | head -n1)
+          CLANG_VERSION=$(PATH="$GITHUB_WORKSPACE/llvm-21/bin:$PATH" clang --version | head -n1)
+          LLD_VERSION=$(PATH="$GITHUB_WORKSPACE/llvm-21/bin:$PATH" ld.lld --version | head -n1)
           BUILD_TIME=$(TZ='Asia/Shanghai' date +"%Y-%m-%d %H:%M:%S")
           IMAGE_SHA256=$(sha256sum "$TAR_FILE" | awk '{print $1}')
           IMAGE_SIZE=$(du -h "$TAR_FILE" | awk '{print $1}')
-          SOURCE_SHA256=$(sha256sum Kernel.tar.gz | awk '{print $1}')
+          SOURCE_COMMIT=$(git -C "$GITHUB_WORKSPACE/kernel-source" rev-parse HEAD)
 
           printf '%s\n' "$KERNEL_VERSION" > out/KERNEL_VERSION.txt
           printf '%s\n' "$IMAGE_NAME" > out/IMAGE_NAME.txt
-          printf '%s\n' "$SOURCE_SHA256" > out/KERNEL_SOURCE_SHA256.txt
+          printf '%s\n' "$SOURCE_COMMIT" > out/KERNEL_SOURCE_COMMIT.txt
 
           {
             echo "# r8q Kernel Build"
@@ -110,7 +126,9 @@ jobs:
             echo "- **Kernel Image**: $IMAGE_NAME"
             echo "- **Image Size**: $IMAGE_SIZE"
             echo "- **Image SHA-256**: $IMAGE_SHA256"
-            echo "- **Source SHA-256**: $SOURCE_SHA256"
+            echo "- **Source Repository**: $KERNEL_SOURCE_REPO"
+            echo "- **Source Ref**: $KERNEL_SOURCE_REF"
+            echo "- **Source Commit**: $SOURCE_COMMIT"
             echo "- **Clang Version**: $CLANG_VERSION"
             echo "- **LLD Version**: $LLD_VERSION"
             echo
@@ -121,7 +139,7 @@ jobs:
           echo "IMAGE_NAME=$IMAGE_NAME" >> "$GITHUB_ENV"
 
       - name: Upload to release
-        uses: ncipollo/release-action@main
+        uses: ncipollo/release-action@v1
         with:
           artifacts: "${{ github.workspace }}/out/r8q/r8q-*-kernel.tar,${{ github.workspace }}/out/*.txt"
           name: "Kernel-${{ env.KERNEL_VERSION }}-${{ github.run_id }}"
