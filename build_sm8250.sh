@@ -114,6 +114,7 @@ CROSS_AS="$(command -v "${CROSS_COMPILE}as" || true)"
 AS_TOOL_DIR="$OUT_DIR/assembler-bin"
 mkdir -p "$AS_TOOL_DIR"
 ln -sfn "$CROSS_AS" "$AS_TOOL_DIR/as"
+export PATH="$AS_TOOL_DIR:$PATH"
 if grep -q -- '-no-integrated-as' "$KERNEL_DIR/Makefile"; then
     sed -E -i "s|CLANG_FLAGS[[:space:]]*\+=[[:space:]]*-no-integrated-as|CLANG_FLAGS += -no-integrated-as -B${AS_TOOL_DIR}/|" \
         "$KERNEL_DIR/Makefile"
