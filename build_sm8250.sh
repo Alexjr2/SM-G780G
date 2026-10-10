@@ -8,14 +8,20 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 KERNEL_DIR="${KERNEL_DIR:-$SCRIPT_DIR/kernel-source}"
 DEVICE="${DEVICE:-r8q}"
 OUT_DIR="${OUT_DIR:-$SCRIPT_DIR/out/$DEVICE}"
-TOOLCHAIN_DIR="${TOOLCHAIN_DIR:-$SCRIPT_DIR/llvm-21}"
+TOOLCHAIN_DIR="${TOOLCHAIN_DIR:-$SCRIPT_DIR/tc/clang}"
 JOBS="${JOBS:-$(nproc)}"
 STOCK_CONFIG_SOURCE="${STOCK_CONFIG_SOURCE:-$SCRIPT_DIR/stock_R8Q}"
 
 DEFCONFIG="${DEFCONFIG:-r8q_generated_defconfig}"
 KSU_SETUP_URL="${KSU_SETUP_URL:-https://raw.githubusercontent.com/backslashxx/KernelSU/master/kernel/setup.sh}"
 KSU_REF="${KSU_REF:-master}"
-CLANG_TOOLCHAIN_URL="${CLANG_TOOLCHAIN_URL:-https://github.com/Ylarod/setup-ndk-clang/releases/download/prebuilt/clang-linux-x86-ndk-r29-r563880c.tar.zst}"
+CLANG_TOOLCHAIN_URL="${CLANG_TOOLCHAIN_URL:-}"
+ORIGIN_BOOTIMG_URL="${ORIGIN_BOOTIMG_URL:-https://github.com/Alexjr2/SM-G780G/releases/download/originalboot/boot.img}"
+MAGISKBOOT_REPO="${MAGISKBOOT_REPO:-xiaoxindada/magisk_bins_ndk}"
+MAGISKBOOT_DIR="${MAGISKBOOT_DIR:-$OUT_DIR/magiskboot}"
+# r8q boot partition budget. This is a limit check only; boot.img is not
+# padded because Android boot images are valid at their actual packed size.
+BOOT_PARTITION_SIZE="${BOOT_PARTITION_SIZE:-67108864}"
 
 GREEN='\033[0;32m'
 RED='\033[0;31m'
@@ -32,21 +38,21 @@ need_cmd() {
     command -v "$1" >/dev/null 2>&1 || die "Required command not found: $1"
 }
 
-for cmd in make curl git tar python3 find sort awk sed; do
+for cmd in make curl jq git tar 7z python3 find sort awk sed; do
     need_cmd "$cmd"
 done
 need_cmd nproc
 
 [[ "$DEVICE" == "r8q" ]] || die "This builder only supports DEVICE=r8q (got: $DEVICE)"
 [[ -f "$KERNEL_DIR/Makefile" ]] || die "Kernel source not found: $KERNEL_DIR"
-[[ -f "$KERNEL_DIR/arch/arm64/configs/vendor/kona-sec-perf_defconfig" ]] || \
+[[ -f "$KERNEL_DIR/arch/arm64/configs/vendor/kona-perf_defconfig" ]] || \
     die "Missing Kona base defconfig"
+[[ -f "$KERNEL_DIR/arch/arm64/configs/vendor/samsung/kona-sec-common.config" ]] || \
+    die "Missing Samsung common config fragment"
 [[ -f "$KERNEL_DIR/arch/arm64/configs/vendor/samsung/r8q.config" ]] || \
     die "Missing r8q config fragment"
 [[ -x "$KERNEL_DIR/tools/dtc" ]] || die "Missing executable: $KERNEL_DIR/tools/dtc"
 [[ -x "$KERNEL_DIR/tools/mkdtimg" ]] || die "Missing executable: $KERNEL_DIR/tools/mkdtimg"
-[[ -f "$KERNEL_DIR/mkbootimg/mkbootimg.py" ]] || die "Missing mkbootimg submodule"
-[[ -f "$KERNEL_DIR/boot/ramdisk" ]] || die "Missing source boot ramdisk"
 
 if [[ ! -s "$STOCK_CONFIG_SOURCE" && -s "$KERNEL_DIR/stock_R8Q" ]]; then
     STOCK_CONFIG_SOURCE="$KERNEL_DIR/stock_R8Q"
@@ -55,6 +61,14 @@ fi
     die "Stock kernel config not found: $STOCK_CONFIG_SOURCE"
 
 chmod -R u+rwX "$KERNEL_DIR"
+
+# Ignore release suffixes shipped by the source tree. The builder controls the
+# release suffix through the explicit LOCALVERSION exported above.
+rm -f -- \
+    "$KERNEL_DIR/localversion" \
+    "$KERNEL_DIR/localversion-cip" \
+    "$KERNEL_DIR/localversion-st" \
+    "$KERNEL_DIR/arch/arm64/configs/vendor/not/localversion.config"
 
 rm -rf -- "$OUT_DIR"
 mkdir -p "$OUT_DIR"
@@ -68,11 +82,17 @@ if [[ -x "$TOOLCHAIN_DIR/bin/clang" ]]; then
     CLANG_BIN="$TOOLCHAIN_DIR/bin/clang"
 else
     need_cmd zstd
-    echo -e "${YELLOW}Downloading Prime toolchain...${NC}"
+    echo -e "${YELLOW}Downloading latest Neutron toolchain...${NC}"
     mkdir -p "$TOOLCHAIN_DIR"
     TOOLCHAIN_ARCHIVE="$OUT_DIR/llvm.tar.zst"
+    if [[ -z "$CLANG_TOOLCHAIN_URL" ]]; then
+        CLANG_TOOLCHAIN_URL="$(curl -fsSL \
+            "https://api.github.com/repos/Neutron-Toolchains/clang-build-catalogue/releases/latest" \
+            | jq -r '[.assets[] | select(.name | endswith(".tar.zst"))][0].browser_download_url // empty')"
+    fi
+    [[ -n "$CLANG_TOOLCHAIN_URL" ]] || die "Could not find a Neutron Clang release"
     curl -fL --retry 3 "$CLANG_TOOLCHAIN_URL" -o "$TOOLCHAIN_ARCHIVE"
-    tar --zstd -xf "$TOOLCHAIN_ARCHIVE" -C "$TOOLCHAIN_DIR"
+    tar --zstd -xf "$TOOLCHAIN_ARCHIVE" -C "$TOOLCHAIN_DIR" --strip-components=1
     rm -f -- "$TOOLCHAIN_ARCHIVE"
     CLANG_BIN="$TOOLCHAIN_DIR/bin/clang"
 fi
@@ -93,6 +113,7 @@ fi
 export ARCH=arm64
 export SUBARCH=arm64
 export CROSS_COMPILE="${CROSS_COMPILE:-aarch64-linux-gnu-}"
+export CROSS_COMPILE_ARM32="${CROSS_COMPILE_ARM32:-arm-linux-gnueabi-}"
 export LOCALVERSION="-27223811"
 export KBUILD_BUILD_USER="dpi"
 export KBUILD_BUILD_HOST="21DKGA22"
@@ -105,10 +126,21 @@ MAKE_ARGS=(
     O="$OUT_DIR"
     ARCH=arm64
     CROSS_COMPILE="$CROSS_COMPILE"
+    CROSS_COMPILE_ARM32="$CROSS_COMPILE_ARM32"
     LLVM=1
     LLVM_IAS=1
     CC="${CCACHE_PREFIX}clang"
     CXX="${CCACHE_PREFIX}clang++"
+    LD=ld.lld
+    AS=llvm-as
+    AR=llvm-ar
+    NM=llvm-nm
+    OBJCOPY=llvm-objcopy
+    OBJDUMP=llvm-objdump
+    STRIP=llvm-strip
+    # The standalone shallow clone cannot satisfy the WLAN driver's optional
+    # git-log build tag generation. It is metadata only, not kernel behavior.
+    WLAN_DISABLE_BUILD_TAG=y
     HOSTCC="${CCACHE_PREFIX}clang"
     HOSTCXX="${CCACHE_PREFIX}clang++"
     HOSTCFLAGS="${HOSTCFLAGS:--w}"
@@ -121,13 +153,47 @@ is_ksu_symbol() {
         "$KERNEL_DIR/drivers/kernelsu" "$KERNEL_DIR/KernelSU/kernel" 2>/dev/null
 }
 
-remove_in_tree_kernelsu() {
-    local ksu_dir="$KERNEL_DIR/drivers/kernelsu"
+remove_vendor_integrations() {
+    echo -e "${YELLOW}Removing vendor submodule integrations...${NC}"
 
-    if [[ -e "$ksu_dir" || -L "$ksu_dir" ]]; then
-        mv -- "$ksu_dir" "$OUT_DIR/in-tree-kernelsu"
-    fi
+    # Do not run the source repository's blanket `git submodule update`: it
+    # would restore the old Baseband-guard, NoMount and sKernelSU trees.
+    rm -rf -- \
+        "$KERNEL_DIR/Baseband-guard" \
+        "$KERNEL_DIR/NoMount" \
+        "$KERNEL_DIR/KernelSU"
 
+    # Remove the symlinks committed by the source repository as well.
+    rm -f -- \
+        "$KERNEL_DIR/security/baseband-guard" \
+        "$KERNEL_DIR/fs/nomount" \
+        "$KERNEL_DIR/drivers/kernelsu"
+
+    # Remove Kconfig/Kbuild references before configuration. Leaving these
+    # references behind would make Kconfig follow missing symlinks.
+    sed -E -i \
+        '/^[[:space:]]*source[[:space:]]+"security\/baseband-guard\/Kconfig"[[:space:]]*$/d' \
+        "$KERNEL_DIR/security/Kconfig"
+    sed -E -i \
+        '/^[[:space:]]*obj-\$\(CONFIG_BBG\).*baseband-guard\//d' \
+        "$KERNEL_DIR/security/Makefile"
+    sed -E -i \
+        '/^[[:space:]]*source[[:space:]]+"fs\/nomount\/Kconfig"[[:space:]]*$/d' \
+        "$KERNEL_DIR/fs/Kconfig"
+    sed -E -i \
+        '/^[[:space:]]*obj-\$\(CONFIG_NOMOUNT\).*nomount\//d' \
+        "$KERNEL_DIR/fs/Makefile"
+
+    # Baseband-guard was also selected through the LSM order in the Kona
+    # defconfig. Remove only that LSM entry; keep the other Samsung LSMs.
+    sed -E -i \
+        -e 's/,baseband_guard//g' \
+        -e 's/baseband_guard,//g' \
+        -e 's/baseband_guard//g' \
+        "$KERNEL_DIR/arch/arm64/configs/vendor/kona-perf_defconfig"
+
+    # Remove the source repository's in-tree KernelSU wiring. The setup
+    # script below will add the fresh external KernelSU clone back cleanly.
     sed -E -i \
         '/^[[:space:]]*obj-\$\(CONFIG_KSU\)[[:space:]]*\+=[[:space:]]*kernelsu\/[[:space:]]*$/d' \
         "$KERNEL_DIR/drivers/Makefile"
@@ -138,7 +204,7 @@ remove_in_tree_kernelsu() {
 
 install_external_kernelsu() {
     echo -e "${YELLOW}Installing external KernelSU ($KSU_REF)...${NC}"
-    remove_in_tree_kernelsu
+    remove_vendor_integrations
 
     (
         cd "$KERNEL_DIR"
@@ -174,8 +240,10 @@ install_external_kernelsu
 
 echo -e "${YELLOW}Generating r8q configuration...${NC}"
 cat \
-    "$KERNEL_DIR/arch/arm64/configs/vendor/kona-sec-perf_defconfig" \
+    "$KERNEL_DIR/arch/arm64/configs/vendor/kona-perf_defconfig" \
+    "$KERNEL_DIR/arch/arm64/configs/vendor/samsung/kona-sec-common.config" \
     "$KERNEL_DIR/arch/arm64/configs/vendor/samsung/r8q.config" \
+    "$KERNEL_DIR/arch/arm64/configs/vendor/not/ksu.config" \
     > "$TEMP_DEFCONFIG"
 
 cat >> "$TEMP_DEFCONFIG" <<EOF
@@ -183,10 +251,9 @@ CONFIG_THINLTO=y
 # CONFIG_LTO_NONE is not set
 CONFIG_LTO_CLANG=y
 CONFIG_CPU_FREQ_DEFAULT_GOV_SCHEDUTIL=y
-CONFIG_LOCALVERSION="$LOCALVERSION"
 EOF
 
-# Keep the last assignment for each symbol, matching the Prime builder
+# Keep the last assignment for each symbol, matching the source builder
 # without producing a wall of harmless Kconfig override warnings.
 awk '
 {
@@ -231,6 +298,39 @@ if is_ksu_symbol KSU_FEATURE_ADBROOT_DEFAULT_ENABLE; then
     "${CONFIG_CMD[@]}" --disable KSU_FEATURE_ADBROOT_DEFAULT_ENABLE
 fi
 
+# Do not let a config fragment or Git metadata add another release suffix.
+# The only suffix used by this build is the hardcoded LOCALVERSION above.
+"${CONFIG_CMD[@]}" --set-str LOCALVERSION ""
+"${CONFIG_CMD[@]}" --disable LOCALVERSION_AUTO
+
+# Detect the source-level KernelSU hooks before choosing the integration mode.
+# This staging source currently has none of the six manual hooks, so the
+# branch-link fallback must remain enabled. If a future source revision adds
+# all of them, the fallback is disabled to avoid double hooking.
+MANUAL_KSU_HOOK_COUNT=0
+check_manual_ksu_hook() {
+    local source_file="$1"
+    local symbol="$2"
+    if grep -Fq -- "$symbol" "$KERNEL_DIR/$source_file"; then
+        echo -e "${GREEN}Manual KSU hook found: $source_file ($symbol)${NC}"
+        MANUAL_KSU_HOOK_COUNT=$((MANUAL_KSU_HOOK_COUNT + 1))
+    else
+        echo -e "${BLUE}Manual KSU hook absent: $source_file ($symbol)${NC}"
+    fi
+}
+check_manual_ksu_hook fs/exec.c ksu_handle_execveat
+check_manual_ksu_hook fs/open.c ksu_handle_faccessat
+check_manual_ksu_hook fs/stat.c ksu_handle_stat
+check_manual_ksu_hook fs/stat.c ksu_handle_newfstat_ret
+check_manual_ksu_hook kernel/reboot.c ksu_handle_sys_reboot
+check_manual_ksu_hook security/selinux/avc.c ksu_slow_avc_audit
+
+if [[ "$MANUAL_KSU_HOOK_COUNT" -eq 6 ]]; then
+    echo -e "${YELLOW}All manual KSU hooks found; disabling branch-link fallback.${NC}"
+else
+    echo -e "${YELLOW}Manual KSU hooks incomplete ($MANUAL_KSU_HOOK_COUNT/6); keeping branch-link fallback enabled.${NC}"
+fi
+
 for optional_symbol in \
     KSU_HACK_ARM64_BRANCH_LINK \
     KSU_HOSTSREDIRECT \
@@ -249,10 +349,13 @@ for optional_symbol in \
     KSU_SUSFS_OPEN_REDIRECT; do
     if is_ksu_symbol "$optional_symbol"; then
         case "$optional_symbol" in
-            # The kernel keeps its own manual hooks (execve, faccessat,
-            # newfstatat, reboot and slow_avc_audit). Do not use the
-            # branch-link fallback on top of those hooks.
-            KSU_HACK_ARM64_BRANCH_LINK|KSU_ENABLE_FULL_UID_CHECKS|KSU_NOPRINTK)
+            KSU_HACK_ARM64_BRANCH_LINK)
+                if [[ "$MANUAL_KSU_HOOK_COUNT" -eq 6 ]]; then
+                    "${CONFIG_CMD[@]}" --disable "$optional_symbol"
+                else
+                    "${CONFIG_CMD[@]}" --enable "$optional_symbol"
+                fi ;;
+            KSU_ENABLE_FULL_UID_CHECKS|KSU_NOPRINTK)
                 "${CONFIG_CMD[@]}" --disable "$optional_symbol" ;;
             *)
                 "${CONFIG_CMD[@]}" --enable "$optional_symbol" ;;
@@ -262,6 +365,16 @@ done
 
 make "${MAKE_ARGS[@]}" olddefconfig
 
+# Verify the final result of scripts/setlocalversion. It normally combines
+# localversion* files, CONFIG_LOCALVERSION, LOCALVERSION and (when enabled)
+# the Git SCM version. Only the hardcoded LOCALVERSION is allowed here.
+KERNEL_VERSION="$(make "${MAKE_ARGS[@]}" kernelversion)"
+KERNEL_RELEASE="$(make "${MAKE_ARGS[@]}" kernelrelease)"
+EXPECTED_KERNEL_RELEASE="${KERNEL_VERSION}${LOCALVERSION}"
+[[ "$KERNEL_RELEASE" == "$EXPECTED_KERNEL_RELEASE" ]] || \
+    die "Unexpected kernel suffix: got '$KERNEL_RELEASE', expected '$EXPECTED_KERNEL_RELEASE'"
+echo -e "${BLUE}Kernel release: $KERNEL_RELEASE${NC}"
+
 grep -q '^CONFIG_KSU=y$' "$OUT_DIR/.config" || die "External KernelSU is not enabled in .config"
 grep -q '^CONFIG_LTO_CLANG=y$' "$OUT_DIR/.config" || die "CONFIG_LTO_CLANG is not enabled"
 grep -q '^CONFIG_BUILD_ARM64_DT_OVERLAY=y$' "$OUT_DIR/.config" || \
@@ -269,8 +382,13 @@ grep -q '^CONFIG_BUILD_ARM64_DT_OVERLAY=y$' "$OUT_DIR/.config" || \
 grep -q '^CONFIG_MACH_R8Q_EUR_OPEN=y$' "$OUT_DIR/.config" || \
     die "CONFIG_MACH_R8Q_EUR_OPEN is not enabled"
 if is_ksu_symbol KSU_HACK_ARM64_BRANCH_LINK; then
-    grep -Eq '^# CONFIG_KSU_HACK_ARM64_BRANCH_LINK is not set$|^CONFIG_KSU_HACK_ARM64_BRANCH_LINK=n$' \
-        "$OUT_DIR/.config" || die "KSU_HACK_ARM64_BRANCH_LINK must remain disabled"
+    if [[ "$MANUAL_KSU_HOOK_COUNT" -eq 6 ]]; then
+        grep -Eq '^# CONFIG_KSU_HACK_ARM64_BRANCH_LINK is not set$|^CONFIG_KSU_HACK_ARM64_BRANCH_LINK=n$' \
+            "$OUT_DIR/.config" || die "KSU_HACK_ARM64_BRANCH_LINK must be disabled with manual hooks"
+    else
+        grep -q '^CONFIG_KSU_HACK_ARM64_BRANCH_LINK=y$' "$OUT_DIR/.config" || \
+            die "KSU_HACK_ARM64_BRANCH_LINK must be enabled without complete manual hooks"
+    fi
 fi
 if is_ksu_symbol KSU_FEATURE_ADBROOT_DEFAULT_ENABLE; then
     grep -Eq '^# CONFIG_KSU_FEATURE_ADBROOT_DEFAULT_ENABLE is not set$|^CONFIG_KSU_FEATURE_ADBROOT_DEFAULT_ENABLE=n$' \
@@ -293,7 +411,7 @@ sed -i 's|\$(KCONFIG_CONFIG)|$(srctree)/arch/arm64/configs/stock_R8Q|g' \
 
 echo -e "${YELLOW}Building Image and DTBs...${NC}"
 BUILD_STDERR="$OUT_DIR/build.stderr.log"
-if ! make -j"$JOBS" "${MAKE_ARGS[@]}" Image dtbs 2>"$BUILD_STDERR"; then
+if ! make -j"$JOBS" "${MAKE_ARGS[@]}" Image dtbs dtbo.img 2>"$BUILD_STDERR"; then
     echo -e "${RED}Kernel build failed; relevant diagnostics:${NC}" >&2
     grep -E 'error:|fatal error:|LLVM ERROR|undefined symbol|ld\.lld: error|make(\[[0-9]+\])?: \*\*\*' \
         "$BUILD_STDERR" | tail -n 160 >&2 || tail -n 160 "$BUILD_STDERR" >&2
@@ -319,45 +437,68 @@ cat "${DTB_FILES[@]}" > "$DTB_OUT"
 DTBO_DIR="$DTB_DIR/samsung/r8q"
 mapfile -t DTBO_FILES < <(
     find "$DTBO_DIR" -maxdepth 1 -type f \
-        -name 'kona-sec-r8q-eur-overlay-*.dtbo' -print | sort -V
+        -name 'kona-sec-r8q-*.dtbo' -print | sort -V
 )
-[[ "${#DTBO_FILES[@]}" -gt 0 ]] || die "No EUR r8q DTBO files were generated"
-[[ "${#DTBO_FILES[@]}" -eq 11 ]] || \
-    die "Expected 11 EUR r8q DTBO files, found ${#DTBO_FILES[@]}"
+[[ "${#DTBO_FILES[@]}" -gt 0 ]] || die "No r8q DTBO files were generated"
 
 DTBOIMG="$OUT_DIR/dtbo.img"
 echo -e "${BLUE}Packing ${#DTBO_FILES[@]} EUR r8q DTBO files...${NC}"
 "$KERNEL_DIR/tools/mkdtimg" create "$DTBOIMG" --page_size=4096 "${DTBO_FILES[@]}"
 
-PACK_DIR="$OUT_DIR/pack"
-mkdir -p "$PACK_DIR"
-BOOTIMG="$PACK_DIR/boot.img"
+MAGISKBOOT="$MAGISKBOOT_DIR/magiskboot"
+mkdir -p "$MAGISKBOOT_DIR"
 
-echo -e "${YELLOW}Packing boot.img with the source repository's ramdisk...${NC}"
-python3 "$KERNEL_DIR/mkbootimg/mkbootimg.py" \
-    --header_version 2 \
-    --kernel "$IMAGE" \
-    --ramdisk "$KERNEL_DIR/boot/ramdisk" \
-    --dtb "$DTB_OUT" \
-    --cmdline "${BOOT_CMDLINE:-console=null androidboot.hardware=qcom androidboot.memcg=1 lpm_levels.sleep_disabled=1 video=vfb:640x400,bpp=32,memsize=3072000 msm_rtb.filter=0x237 service_locator.enable=1 androidboot.usbcontroller=a600000.dwc3 swiotlb=2048 printk.devkmsg=on firmware_class.path=/vendor/firmware_mnt/image loop.max_part=7}" \
-    --base 0x00000000 \
-    --kernel_offset 0x00008000 \
-    --ramdisk_offset 0x02000000 \
-    --second_offset 0x00000000 \
-    --dtb_offset 0x01f00000 \
-    --tags_offset 0x01e00000 \
-    --board SRPUB26A012 \
-    --pagesize 4096 \
-    --os_version "${OS_VERSION:-16.0.0}" \
-    --os_patch_level "${OS_PATCH_LEVEL:-$(date +%Y-%m)}" \
-    --output "$BOOTIMG"
+if [[ ! -x "$MAGISKBOOT" ]]; then
+    need_cmd zstd
+    MAGISKBOOT_URL="${MAGISKBOOT_URL:-}"
+    if [[ -z "$MAGISKBOOT_URL" ]]; then
+        MAGISKBOOT_URL="$(curl -fsSL \
+            "https://api.github.com/repos/$MAGISKBOOT_REPO/releases/latest" \
+            | jq -r '[.assets[] | select(.name | endswith(".7z"))][0].browser_download_url // empty')"
+    fi
+    [[ -n "$MAGISKBOOT_URL" ]] || die "Could not find a Magiskboot .7z release"
 
-[[ -s "$BOOTIMG" ]] || die "boot.img was not generated"
-cp -- "$DTBOIMG" "$PACK_DIR/dtbo.img"
+    MAGISKBOOT_ARCHIVE="$OUT_DIR/magiskboot.7z"
+    echo -e "${YELLOW}Downloading Magiskboot...${NC}"
+    curl -fL --retry 3 "$MAGISKBOOT_URL" -o "$MAGISKBOOT_ARCHIVE"
+    7z e -y "$MAGISKBOOT_ARCHIVE" native/out/x86_64/magiskboot \
+        "-o$MAGISKBOOT_DIR" >/dev/null
+    rm -f -- "$MAGISKBOOT_ARCHIVE"
+fi
+[[ -x "$MAGISKBOOT" ]] || die "Magiskboot was not extracted: $MAGISKBOOT"
 
 BUILD_TAG="${BUILD_TAG:-$(TZ='Asia/Makassar' date +%Y%m%d-%H%M)}"
+PACK_DIR="$OUT_DIR/pack"
+rm -rf -- "$PACK_DIR"
+mkdir -p "$PACK_DIR"
+
+echo -e "${YELLOW}Downloading stock boot.img...${NC}"
+curl -fL --retry 3 "$ORIGIN_BOOTIMG_URL" -o "$PACK_DIR/original-boot.img"
+
+echo -e "${YELLOW}Replacing kernel and DTB in stock boot.img...${NC}"
+(
+    cd "$PACK_DIR"
+    "$MAGISKBOOT" unpack original-boot.img
+    [[ -f kernel ]] || { echo "Magiskboot did not extract kernel" >&2; exit 1; }
+    cp -- "$IMAGE" kernel
+    cp -- "$DTB_OUT" dtb
+    "$MAGISKBOOT" repack original-boot.img
+)
+
+[[ -s "$PACK_DIR/new-boot.img" ]] || die "Magiskboot did not create new-boot.img"
+mv -- "$PACK_DIR/new-boot.img" "$PACK_DIR/boot.img"
+cp -- "$DTBOIMG" "$PACK_DIR/dtbo.img"
+
+BOOT_SIZE_BYTES="$(wc -c < "$PACK_DIR/boot.img")"
+[[ "$BOOT_SIZE_BYTES" =~ ^[0-9]+$ ]] || die "Could not determine boot.img size"
+if (( BOOT_SIZE_BYTES > BOOT_PARTITION_SIZE )); then
+    die "boot.img is ${BOOT_SIZE_BYTES} bytes, larger than the ${BOOT_PARTITION_SIZE}-byte boot partition budget"
+fi
+echo -e "${BLUE}boot.img size: ${BOOT_SIZE_BYTES} bytes; partition budget: ${BOOT_PARTITION_SIZE} bytes${NC}"
+
 TAR_NAME="${DEVICE}-${BUILD_TAG}-kernel.tar"
 tar -cf "$OUT_DIR/$TAR_NAME" -C "$PACK_DIR" boot.img dtbo.img
+[[ -s "$OUT_DIR/$TAR_NAME" ]] || die "Kernel TAR was not generated"
 
 echo -e "${GREEN}Done: $OUT_DIR/$TAR_NAME${NC}"
 echo -e "${GREEN}Completed in $((SECONDS / 60))m $((SECONDS % 60))s${NC}"
