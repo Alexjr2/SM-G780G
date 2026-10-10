@@ -43,7 +43,6 @@ jobs:
             libssl-dev \
             lld \
             llvm \
-            p7zip-full \
             python3 \
             tar \
             xz-utils \
