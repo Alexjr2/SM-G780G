@@ -116,6 +116,7 @@ export SUBARCH=arm64
 export CROSS_COMPILE="${CROSS_COMPILE:-aarch64-linux-gnu-}"
 export CROSS_COMPILE_ARM32="${CROSS_COMPILE_ARM32:-arm-linux-gnueabi-}"
 export LOCALVERSION="-27223811"
+KERNEL_LOCALVERSION="$LOCALVERSION"
 export KBUILD_BUILD_USER="dpi"
 export KBUILD_BUILD_HOST="21DKGA22"
 export KBUILD_BUILD_VERSION="1"
@@ -252,6 +253,8 @@ CONFIG_THINLTO=y
 # CONFIG_LTO_NONE is not set
 CONFIG_LTO_CLANG=y
 CONFIG_CPU_FREQ_DEFAULT_GOV_SCHEDUTIL=y
+CONFIG_LOCALVERSION="$KERNEL_LOCALVERSION"
+# CONFIG_LOCALVERSION_AUTO is not set
 EOF
 
 # Keep the last assignment for each symbol, matching the source builder
@@ -300,9 +303,12 @@ if is_ksu_symbol KSU_FEATURE_ADBROOT_DEFAULT_ENABLE; then
 fi
 
 # Do not let a config fragment or Git metadata add another release suffix.
-# The only suffix used by this build is the hardcoded LOCALVERSION above.
-"${CONFIG_CMD[@]}" --set-str LOCALVERSION ""
+# The only suffix used by this build is the hardcoded LOCALVERSION above,
+# stored in CONFIG_LOCALVERSION so the environment cannot duplicate it.
+"${CONFIG_CMD[@]}" --set-str LOCALVERSION "$KERNEL_LOCALVERSION"
 "${CONFIG_CMD[@]}" --disable LOCALVERSION_AUTO
+"${CONFIG_CMD[@]}" --disable LOCALVERSION_SHA
+export LOCALVERSION=""
 
 # Detect the source-level KernelSU hooks before choosing the integration mode.
 # This staging source currently has none of the six manual hooks, so the
@@ -369,9 +375,9 @@ make "${MAKE_ARGS[@]}" olddefconfig
 # Verify the final result of scripts/setlocalversion. It normally combines
 # localversion* files, CONFIG_LOCALVERSION, LOCALVERSION and (when enabled)
 # the Git SCM version. Only the hardcoded LOCALVERSION is allowed here.
-KERNEL_VERSION="$(make "${MAKE_ARGS[@]}" kernelversion)"
-KERNEL_RELEASE="$(make "${MAKE_ARGS[@]}" kernelrelease)"
-EXPECTED_KERNEL_RELEASE="${KERNEL_VERSION}${LOCALVERSION}"
+KERNEL_VERSION="$(make -s "${MAKE_ARGS[@]}" kernelversion)"
+KERNEL_RELEASE="$(make -s "${MAKE_ARGS[@]}" kernelrelease)"
+EXPECTED_KERNEL_RELEASE="${KERNEL_VERSION}${KERNEL_LOCALVERSION}"
 [[ "$KERNEL_RELEASE" == "$EXPECTED_KERNEL_RELEASE" ]] || \
     die "Unexpected kernel suffix: got '$KERNEL_RELEASE', expected '$EXPECTED_KERNEL_RELEASE'"
 echo -e "${BLUE}Kernel release: $KERNEL_RELEASE${NC}"
