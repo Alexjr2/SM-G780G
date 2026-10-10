@@ -7,7 +7,7 @@ permissions:
   contents: write
 
 env:
-  KERNEL_SOURCE_REPO: https://github.com/notkernel-oss/not_samsung.sm8250-4.19.git
+  KERNEL_SOURCE_REPO: https://github.com/Lazy-Encrypted/not_samsung.sm8250-4.19.git
   KERNEL_SOURCE_REF: staging
 
 jobs:
@@ -66,6 +66,16 @@ jobs:
           test -f kernel-source/tools/dtc
           test -f kernel-source/tools/mkdtimg
           chmod +x kernel-source/tools/dtc kernel-source/tools/mkdtimg
+
+      - name: Prepare local x86_64 Magiskboot
+        run: |
+          set -euo pipefail
+          MAGISKBOOT_BIN="$GITHUB_WORKSPACE/magiskboot"
+          test -f "$MAGISKBOOT_BIN"
+          chmod +x "$MAGISKBOOT_BIN"
+          test -x "$MAGISKBOOT_BIN"
+          echo "Using repository x86_64 Magiskboot: $MAGISKBOOT_BIN"
+          echo "MAGISKBOOT_BIN=$MAGISKBOOT_BIN" >> "$GITHUB_ENV"
 
       - name: Build r8q kernel
         run: |
