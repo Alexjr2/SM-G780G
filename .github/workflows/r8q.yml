@@ -7,7 +7,7 @@ permissions:
   contents: write
 
 env:
-  KERNEL_SOURCE_REPO: https://github.com/Lazy-Encrypted/not_samsung.sm8250-4.19.git
+  KERNEL_SOURCE_REPO: https://github.com/AstroByteX-Code/not_samsung.sm8250-4.19.git
   KERNEL_SOURCE_REF: staging
 
 jobs:
