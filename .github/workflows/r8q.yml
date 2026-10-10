@@ -66,6 +66,52 @@ jobs:
           test -f kernel-source/tools/mkdtimg
           chmod +x kernel-source/tools/dtc kernel-source/tools/mkdtimg
 
+      - name: Apply Qualcomm procfs compatibility fixes
+        run: |
+          set -euo pipefail
+
+          LINUX_AC="kernel-source/drivers/net/wireless/qualcomm/qca-wifi-host-cmn/utils/pktlog/linux_ac.c"
+          ATH_PROCFS="kernel-source/drivers/net/wireless/qualcomm/qca-wifi-host-cmn/hif/src/ath_procfs.c"
+
+          test -f "$LINUX_AC"
+          test -f "$ATH_PROCFS"
+
+          # This 4.19 tree does not provide struct proc_ops. Change only the
+          # two Qualcomm procfs operation tables; do not replace whole files
+          # or touch unrelated .proc_handler sysctl fields.
+          sed -i \
+            -e 's/struct proc_ops pktlog_fops/struct file_operations pktlog_fops/' \
+            -e 's/\.proc_open/\.open/g' \
+            -e 's/\.proc_read/\.read/g' \
+            -e 's/\.proc_release/\.release/g' \
+            "$LINUX_AC"
+
+          sed -i \
+            -e 's/struct proc_ops athdiag_fops/struct file_operations athdiag_fops/' \
+            -e 's/\.proc_read/\.read/g' \
+            -e 's/\.proc_write/\.write/g' \
+            "$ATH_PROCFS"
+
+          grep -Fq 'struct file_operations pktlog_fops' "$LINUX_AC"
+          grep -Fq 'struct file_operations athdiag_fops' "$ATH_PROCFS"
+          ! grep -Fq 'struct proc_ops pktlog_fops' "$LINUX_AC"
+          ! grep -Fq 'struct proc_ops athdiag_fops' "$ATH_PROCFS"
+
+          # The branch contains two copies of QCACLD using the same
+          # CONFIG_QCA_CLD_WLAN symbol. Keep the newer in-tree Qualcomm path
+          # under drivers/net/wireless/qualcomm and stop Kbuild/Kconfig from
+          # compiling the duplicate staging copy.
+          sed -E -i \
+            '/^[[:space:]]*source[[:space:]]+"drivers\/staging\/qcacld-3\.0\/Kconfig"[[:space:]]*$/d' \
+            kernel-source/drivers/staging/Kconfig
+          sed -E -i \
+            '/^[[:space:]]*obj-\$\(CONFIG_QCA_CLD_WLAN\)[[:space:]]*\+=[[:space:]]*qcacld-3\.0\/[[:space:]]*$/d' \
+            kernel-source/drivers/staging/Makefile
+
+          ! grep -Fq 'drivers/staging/qcacld-3.0/Kconfig' kernel-source/drivers/staging/Kconfig
+          ! grep -Eq 'obj-\$\(CONFIG_QCA_CLD_WLAN\).*qcacld-3\.0/' kernel-source/drivers/staging/Makefile
+          grep -Fq 'obj-$(CONFIG_QCA_CLD_WLAN)' kernel-source/drivers/net/wireless/Makefile
+
       - name: Prepare local x86_64 Magiskboot
         run: |
           set -euo pipefail
