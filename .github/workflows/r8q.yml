@@ -63,8 +63,9 @@ jobs:
           test -f kernel-source/arch/arm64/configs/vendor/kona-perf_defconfig
           test -f kernel-source/arch/arm64/configs/vendor/samsung/kona-sec-common.config
           test -f kernel-source/arch/arm64/configs/vendor/samsung/r8q.config
-          test -x kernel-source/tools/dtc
-          test -x kernel-source/tools/mkdtimg
+          test -f kernel-source/tools/dtc
+          test -f kernel-source/tools/mkdtimg
+          chmod +x kernel-source/tools/dtc kernel-source/tools/mkdtimg
 
       - name: Build r8q kernel
         run: |
