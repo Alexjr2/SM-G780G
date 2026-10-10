@@ -51,8 +51,8 @@ need_cmd nproc
     die "Missing Samsung common config fragment"
 [[ -f "$KERNEL_DIR/arch/arm64/configs/vendor/samsung/r8q.config" ]] || \
     die "Missing r8q config fragment"
-[[ -x "$KERNEL_DIR/tools/dtc" ]] || die "Missing executable: $KERNEL_DIR/tools/dtc"
-[[ -x "$KERNEL_DIR/tools/mkdtimg" ]] || die "Missing executable: $KERNEL_DIR/tools/mkdtimg"
+[[ -f "$KERNEL_DIR/tools/dtc" ]] || die "Missing tool: $KERNEL_DIR/tools/dtc"
+[[ -f "$KERNEL_DIR/tools/mkdtimg" ]] || die "Missing tool: $KERNEL_DIR/tools/mkdtimg"
 
 if [[ ! -s "$STOCK_CONFIG_SOURCE" && -s "$KERNEL_DIR/stock_R8Q" ]]; then
     STOCK_CONFIG_SOURCE="$KERNEL_DIR/stock_R8Q"
@@ -61,6 +61,7 @@ fi
     die "Stock kernel config not found: $STOCK_CONFIG_SOURCE"
 
 chmod -R u+rwX "$KERNEL_DIR"
+chmod +x "$KERNEL_DIR/tools/dtc" "$KERNEL_DIR/tools/mkdtimg"
 
 # Ignore release suffixes shipped by the source tree. The builder controls the
 # release suffix through the explicit LOCALVERSION exported above.
