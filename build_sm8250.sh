@@ -17,6 +17,10 @@ KSU_SETUP_URL="${KSU_SETUP_URL:-https://raw.githubusercontent.com/backslashxx/Ke
 KSU_REF="${KSU_REF:-master}"
 CLANG_TOOLCHAIN_URL="${CLANG_TOOLCHAIN_URL:-}"
 ORIGIN_BOOTIMG_URL="${ORIGIN_BOOTIMG_URL:-https://github.com/Alexjr2/SM-G780G/releases/download/originalboot/boot.img}"
+# Match the stock Samsung kernel identity in uname/proc/version. The source
+# tree is based on 4.19.325, but the stock r8q kernel reports 4.19.113.
+STOCK_KERNEL_VERSION="4.19.113"
+STOCK_KERNEL_COMPILER="clang version 10.0.6 for Android NDK"
 # Pin a known release asset so Actions does not depend on the anonymous
 # GitHub API rate limit. Override MAGISKBOOT_URL when a newer binary is needed.
 MAGISKBOOT_URL="${MAGISKBOOT_URL:-https://github.com/xiaoxindada/magisk_bins_ndk/releases/download/magisk_bins-31000-f7ddbcdebe5765417b5ae4560b7d327a04149846/magisk_bins.7z}"
@@ -64,6 +68,33 @@ fi
 
 chmod -R u+rwX "$KERNEL_DIR"
 chmod +x "$KERNEL_DIR/tools/dtc" "$KERNEL_DIR/tools/mkdtimg"
+
+# Keep the built kernel's base version equal to stock. This affects the
+# kernel release string, vermagic, and the Linux version shown by Android.
+KERNEL_MAKEFILE="$KERNEL_DIR/Makefile"
+MKCOMPILE_H="$KERNEL_DIR/scripts/mkcompile_h"
+[[ -f "$MKCOMPILE_H" ]] || die "Missing compile header generator: $MKCOMPILE_H"
+
+if grep -Eq '^SUBLEVEL[[:space:]]*=' "$KERNEL_MAKEFILE"; then
+    sed -E -i "s|^SUBLEVEL[[:space:]]*=.*$|SUBLEVEL = ${STOCK_KERNEL_VERSION##*.}|" \
+        "$KERNEL_MAKEFILE"
+else
+    die "Unsupported kernel Makefile: SUBLEVEL assignment was not found"
+fi
+
+# The source tree appends its own compiler identity and a project message:
+#   (not_kernel: It's about a girl in a box.)
+# Replace that generated field with the stock compiler string exactly.
+if grep -Eq '^[[:space:]]*MESSAGE=' "$MKCOMPILE_H" && \
+   grep -Eq '^[[:space:]]*printf .*LINUX_COMPILER' "$MKCOMPILE_H"; then
+    sed -E -i 's|^[[:space:]]*MESSAGE=.*$|MESSAGE=""|' "$MKCOMPILE_H"
+    sed -i "/^[[:space:]]*printf .*LINUX_COMPILER/c\\  echo '#define LINUX_COMPILER \"clang version 10.0.6 for Android NDK\"'" \
+        "$MKCOMPILE_H"
+else
+    die "Unsupported scripts/mkcompile_h: compiler identity line was not found"
+fi
+
+echo -e "${BLUE}Stock kernel identity: ${STOCK_KERNEL_VERSION}; compiler: ${STOCK_KERNEL_COMPILER}${NC}"
 
 # Ignore release suffixes shipped by the source tree. The builder controls the
 # release suffix through the explicit LOCALVERSION exported above.
@@ -380,6 +411,8 @@ make "${MAKE_ARGS[@]}" olddefconfig
 KERNEL_VERSION="$(make -s "${MAKE_ARGS[@]}" kernelversion)"
 KERNEL_RELEASE="$(make -s "${MAKE_ARGS[@]}" kernelrelease)"
 EXPECTED_KERNEL_RELEASE="${KERNEL_VERSION}${KERNEL_LOCALVERSION}"
+[[ "$KERNEL_VERSION" == "$STOCK_KERNEL_VERSION" ]] || \
+    die "Unexpected kernel base version: got '$KERNEL_VERSION', expected '$STOCK_KERNEL_VERSION'"
 [[ "$KERNEL_RELEASE" == "$EXPECTED_KERNEL_RELEASE" ]] || \
     die "Unexpected kernel suffix: got '$KERNEL_RELEASE', expected '$EXPECTED_KERNEL_RELEASE'"
 echo -e "${BLUE}Kernel release: $KERNEL_RELEASE${NC}"
@@ -427,6 +460,15 @@ if ! make -j"$JOBS" "${MAKE_ARGS[@]}" Image dtbs dtbo.img 2>"$BUILD_STDERR"; the
     echo -e "${YELLOW}Full stderr log: $BUILD_STDERR${NC}" >&2
     exit 1
 fi
+
+COMPILE_H="$OUT_DIR/include/generated/compile.h"
+[[ -f "$COMPILE_H" ]] || die "Generated compile header was not found: $COMPILE_H"
+grep -Fq '#define LINUX_COMPILER "clang version 10.0.6 for Android NDK"' "$COMPILE_H" || \
+    die "Generated compiler identity does not match stock: $COMPILE_H"
+grep -Fq '#define LINUX_COMPILE_BY "dpi"' "$COMPILE_H" || \
+    die "Generated compiler user does not match stock: $COMPILE_H"
+grep -Fq '#define LINUX_COMPILE_HOST "21DKGA22"' "$COMPILE_H" || \
+    die "Generated compiler host does not match stock: $COMPILE_H"
 
 IMAGE="$OUT_DIR/arch/arm64/boot/Image"
 [[ -f "$IMAGE" ]] || die "Kernel Image was not generated"
