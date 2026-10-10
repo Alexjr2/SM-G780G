@@ -21,10 +21,8 @@ ORIGIN_BOOTIMG_URL="${ORIGIN_BOOTIMG_URL:-https://github.com/Alexjr2/SM-G780G/re
 # tree is based on 4.19.325, but the stock r8q kernel reports 4.19.113.
 STOCK_KERNEL_VERSION="4.19.113"
 STOCK_KERNEL_COMPILER="clang version 10.0.6 for Android NDK"
-# Pin a known release asset so Actions does not depend on the anonymous
-# GitHub API rate limit. Override MAGISKBOOT_URL when a newer binary is needed.
-MAGISKBOOT_URL="${MAGISKBOOT_URL:-https://github.com/xiaoxindada/magisk_bins_ndk/releases/download/magisk_bins-31000-f7ddbcdebe5765417b5ae4560b7d327a04149846/magisk_bins.7z}"
-MAGISKBOOT_DIR="${MAGISKBOOT_DIR:-$OUT_DIR/magiskboot}"
+# Magiskboot is supplied as an x86_64 binary in the repository root.
+MAGISKBOOT_BIN="${MAGISKBOOT_BIN:-$SCRIPT_DIR/magiskboot}"
 # r8q boot partition budget. This is a limit check only; boot.img is not
 # padded because Android boot images are valid at their actual packed size.
 BOOT_PARTITION_SIZE="${BOOT_PARTITION_SIZE:-67108864}"
@@ -44,7 +42,7 @@ need_cmd() {
     command -v "$1" >/dev/null 2>&1 || die "Required command not found: $1"
 }
 
-for cmd in make curl jq git tar 7z python3 find sort awk sed; do
+for cmd in make curl jq git tar python3 find sort awk sed; do
     need_cmd "$cmd"
 done
 need_cmd nproc
@@ -496,23 +494,13 @@ DTBOIMG="$OUT_DIR/dtbo.img"
 echo -e "${BLUE}Packing ${#DTBO_FILES[@]} EUR r8q DTBO files...${NC}"
 "$KERNEL_DIR/tools/mkdtimg" create "$DTBOIMG" --page_size=4096 "${DTBO_FILES[@]}"
 
-MAGISKBOOT="$MAGISKBOOT_DIR/magiskboot"
-mkdir -p "$MAGISKBOOT_DIR"
+[[ -f "$MAGISKBOOT_BIN" ]] || die "Magiskboot binary not found: $MAGISKBOOT_BIN"
+chmod +x "$MAGISKBOOT_BIN"
+[[ -x "$MAGISKBOOT_BIN" ]] || die "Magiskboot binary is not executable: $MAGISKBOOT_BIN"
+MAGISKBOOT="$MAGISKBOOT_BIN"
+echo -e "${BLUE}Using repository x86_64 Magiskboot: $MAGISKBOOT${NC}"
 
-if [[ ! -x "$MAGISKBOOT" ]]; then
-    need_cmd zstd
-    [[ -n "$MAGISKBOOT_URL" ]] || die "Could not find a Magiskboot .7z release"
-
-    MAGISKBOOT_ARCHIVE="$OUT_DIR/magiskboot.7z"
-    echo -e "${YELLOW}Downloading Magiskboot...${NC}"
-    curl -fL --retry 3 "$MAGISKBOOT_URL" -o "$MAGISKBOOT_ARCHIVE"
-    7z e -y "$MAGISKBOOT_ARCHIVE" native/out/x86_64/magiskboot \
-        "-o$MAGISKBOOT_DIR" >/dev/null
-    rm -f -- "$MAGISKBOOT_ARCHIVE"
-fi
-[[ -x "$MAGISKBOOT" ]] || die "Magiskboot was not extracted: $MAGISKBOOT"
-
-BUILD_TAG="${BUILD_TAG:-$(TZ='Asia/Makassar' date +%Y%m%d-%H%M)}"
+BUILD_TAG="${BUILD_TAG:-$(TZ='Asia/Shanghai' date +%Y%m%d-%H%M)}"
 PACK_DIR="$OUT_DIR/pack"
 rm -rf -- "$PACK_DIR"
 mkdir -p "$PACK_DIR"
