@@ -17,7 +17,9 @@ KSU_SETUP_URL="${KSU_SETUP_URL:-https://raw.githubusercontent.com/backslashxx/Ke
 KSU_REF="${KSU_REF:-master}"
 CLANG_TOOLCHAIN_URL="${CLANG_TOOLCHAIN_URL:-}"
 ORIGIN_BOOTIMG_URL="${ORIGIN_BOOTIMG_URL:-https://github.com/Alexjr2/SM-G780G/releases/download/originalboot/boot.img}"
-MAGISKBOOT_REPO="${MAGISKBOOT_REPO:-xiaoxindada/magisk_bins_ndk}"
+# Pin a known release asset so Actions does not depend on the anonymous
+# GitHub API rate limit. Override MAGISKBOOT_URL when a newer binary is needed.
+MAGISKBOOT_URL="${MAGISKBOOT_URL:-https://github.com/xiaoxindada/magisk_bins_ndk/releases/download/magisk_bins-31000-f7ddbcdebe5765417b5ae4560b7d327a04149846/magisk_bins.7z}"
 MAGISKBOOT_DIR="${MAGISKBOOT_DIR:-$OUT_DIR/magiskboot}"
 # r8q boot partition budget. This is a limit check only; boot.img is not
 # padded because Android boot images are valid at their actual packed size.
@@ -457,12 +459,6 @@ mkdir -p "$MAGISKBOOT_DIR"
 
 if [[ ! -x "$MAGISKBOOT" ]]; then
     need_cmd zstd
-    MAGISKBOOT_URL="${MAGISKBOOT_URL:-}"
-    if [[ -z "$MAGISKBOOT_URL" ]]; then
-        MAGISKBOOT_URL="$(curl -fsSL \
-            "https://api.github.com/repos/$MAGISKBOOT_REPO/releases/latest" \
-            | jq -r '[.assets[] | select(.name | endswith(".7z"))][0].browser_download_url // empty')"
-    fi
     [[ -n "$MAGISKBOOT_URL" ]] || die "Could not find a Magiskboot .7z release"
 
     MAGISKBOOT_ARCHIVE="$OUT_DIR/magiskboot.7z"
